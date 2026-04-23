@@ -1,24 +1,20 @@
-name: NAT Traversal VPN (Manual)
+name: NAT Traversal VPN
 
 on:
   workflow_dispatch:
     inputs:
       vpn_type:
-        description: 'VPN type'
         required: true
         type: choice
-        options:
-          - openvpn
+        options: [openvpn]
       public_ip:
-        description: 'Your public IP address'
         required: true
         type: string
       local_port:
-        description: 'UDP port on your machine'
         required: true
         type: string
-      static_key:
-        description: 'Paste the ENTIRE content of static.key'
+      static_key_b64:
+        description: 'Base64 encoded static.key file (run: cat static.key | base64 -w0)'
         required: true
         type: string
 
@@ -29,10 +25,9 @@ jobs:
     steps:
       - name: Install OpenVPN
         run: sudo apt update && sudo apt install -y openvpn
-
-      - name: Save static key and connect
+      - name: Decode key and connect
         run: |
-          echo "${{ github.event.inputs.static_key }}" > static.key
+          echo "${{ github.event.inputs.static_key_b64 }}" | base64 -d > static.key
           sudo chmod 600 static.key
           cat > client.ovpn << EOF
           remote ${{ github.event.inputs.public_ip }} ${{ github.event.inputs.local_port }}
@@ -42,7 +37,6 @@ jobs:
           cipher AES-256-CBC
           verb 3
           EOF
-          sudo openvpn --config client.ovpn &
+          sudo openvpn --config client.ovpn --allow-deprecated-insecure-static-crypto &
           sleep 5
-          # Keep alive for 5 hours 50 minutes
           sleep 21000
