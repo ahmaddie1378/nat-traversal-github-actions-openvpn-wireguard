@@ -1,136 +1,17 @@
-name: Manual OpenVPN Server
+name: SSH Reverse Tunnel
 
 on:
   workflow_dispatch:
-    inputs:
-      public_ip:
-        description: 'Your public IP address'
-        required: true
-        type: string
-      local_port:
-        description: 'Local UDP port (20000-30000)'
-        required: true
-        type: string
-        default: '25000'
 
 jobs:
-  openvpn:
+  tunnel:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup OpenVPN server with Easy-RSA (non-interactive)
+      - name: Establish reverse SSH tunnel via Serveo
         run: |
-          # Update and install OpenVPN and easy-rsa
-          sudo apt update
-          sudo apt install -y openvpn easy-rsa iptables
-
-          # Setup PKI in batch mode
-          export EASYRSA_BATCH=1
-          make-cadir ~/openvpn-ca
-          cd ~/openvpn-ca
-
-          # Initialize PKI
-          ./easyrsa init-pki
-
-          # Build CA without password
-          ./easyrsa build-ca nopass
-
-          # Generate server certificate request and sign it (non-interactive)
-          ./easyrsa gen-req server nopass
-          ./easyrsa sign-req server server
-
-          # Generate Diffie-Hellman parameters
-          ./easyrsa gen-dh
-
-          # Generate TLS-Auth key
-          openvpn --genkey --secret ta.key
-
-          # Copy files to OpenVPN directory
-          sudo mkdir -p /etc/openvpn/server
-          sudo cp pki/ca.crt pki/issued/server.crt pki/private/server.key pki/dh.pem ta.key /etc/openvpn/server
-
-          # Create server configuration
-          cat | sudo tee /etc/openvpn/server/server.conf << EOF
-          port 1194
-          proto udp
-          dev tun
-          ca ca.crt
-          cert server.crt
-          key server.key
-          dh dh.pem
-          tls-auth ta.key 0
-          server 10.8.0.0 255.255.255.0
-          push "redirect-gateway def1 bypass-dhcp"
-          push "dhcp-option DNS 8.8.8.8"
-          push "dhcp-option DNS 1.1.1.1"
-          keepalive 10 120
-          cipher AES-256-CBC
-          user nobody
-          group nogroup
-          persist-key
-          persist-tun
-          status openvpn-status.log
-          verb 3
-          explicit-exit-notify 1
-          EOF
-
-          # Enable IP forwarding and NAT
-          sudo sysctl -w net.ipv4.ip_forward=1
-          sudo iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
-
-          # Start OpenVPN server
-          sudo systemctl start openvpn-server@server
-          sudo systemctl enable openvpn-server@server
-
-      - name: Generate client config for NAT traversal
-        run: |
-          cd ~/openvpn-ca
-
-          # Generate client certificate (non-interactive)
-          export EASYRSA_BATCH=1
-          ./easyrsa gen-req client1 nopass
-          ./easyrsa sign-req client client1
-
-          PUBLIC_IP="${{ github.event.inputs.public_ip }}"
-          LOCAL_PORT="${{ github.event.inputs.local_port }}"
-
-          # Build client.ovpn
-          cat > client.ovpn << EOF
-          client
-          dev tun
-          proto udp
-          remote $PUBLIC_IP $LOCAL_PORT
-          resolv-retry infinite
-          nobind
-          persist-key
-          persist-tun
-          remote-cert-tls server
-          cipher AES-256-CBC
-          verb 3
-          <ca>
-          $(cat ~/openvpn-ca/pki/ca.crt)
-          </ca>
-          <cert>
-          $(cat ~/openvpn-ca/pki/issued/client1.crt)
-          </cert>
-          <key>
-          $(cat ~/openvpn-ca/pki/private/client1.key)
-          </key>
-          <tls-auth>
-          $(cat ~/openvpn-ca/ta.key)
-          </tls-auth>
-          key-direction 1
-          EOF
-
-          echo "=============================================="
-          echo "CLIENT CONFIGURATION (Save as client.ovpn):"
-          echo "=============================================="
-          cat client.ovpn
-          echo "=============================================="
-
-      - name: Keep alive (5h50m)
-        run: |
-          echo "OpenVPN server running. Keep alive for 5h50m."
+          sudo apt update && sudo apt install -y autossh
+          # This forwards GitHub's port 8888 to your local SSH server on port 22
+          autossh -M 0 -o "StrictHostKeyChecking=no" -o "ServerAliveInterval 60" -R 80:localhost:22 serveo.net &
+          sleep 10
+          echo "Tunnel established. SSH to your local machine via: ssh -p 80 user@serveo.net"
           sleep 21000
