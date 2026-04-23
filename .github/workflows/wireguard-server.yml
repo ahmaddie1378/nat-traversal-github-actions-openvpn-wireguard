@@ -1,16 +1,24 @@
-name: NAT Traversal VPN
+name: NAT Traversal VPN (Manual)
 
 on:
   workflow_dispatch:
     inputs:
       vpn_type:
+        description: 'VPN type'
         required: true
         type: choice
-        options: [openvpn, wireguard]
+        options:
+          - openvpn
       public_ip:
+        description: 'Your public IP address'
         required: true
         type: string
       local_port:
+        description: 'UDP port on your machine'
+        required: true
+        type: string
+      static_key:
+        description: 'Paste the ENTIRE content of static.key'
         required: true
         type: string
 
@@ -19,9 +27,12 @@ jobs:
     if: ${{ github.event.inputs.vpn_type == 'openvpn' }}
     runs-on: ubuntu-latest
     steps:
-      - run: sudo apt update && sudo apt install -y openvpn
-      - run: |
-          echo "${{ secrets.OVPN_STATIC_KEY }}" > static.key
+      - name: Install OpenVPN
+        run: sudo apt update && sudo apt install -y openvpn
+
+      - name: Save static key and connect
+        run: |
+          echo "${{ github.event.inputs.static_key }}" > static.key
           sudo chmod 600 static.key
           cat > client.ovpn << EOF
           remote ${{ github.event.inputs.public_ip }} ${{ github.event.inputs.local_port }}
@@ -33,4 +44,5 @@ jobs:
           EOF
           sudo openvpn --config client.ovpn &
           sleep 5
+          # Keep alive for 5 hours 50 minutes
           sleep 21000
