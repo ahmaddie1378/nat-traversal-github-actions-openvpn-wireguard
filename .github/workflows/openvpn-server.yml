@@ -20,26 +20,38 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup OpenVPN server
+      - name: Setup OpenVPN server with Easy-RSA (non-interactive)
         run: |
           # Update and install OpenVPN and easy-rsa
           sudo apt update
           sudo apt install -y openvpn easy-rsa iptables
 
-          # Setup PKI
+          # Setup PKI in batch mode
+          export EASYRSA_BATCH=1
           make-cadir ~/openvpn-ca
           cd ~/openvpn-ca
+
+          # Initialize PKI
           ./easyrsa init-pki
-          echo -e "server\n" | ./easyrsa build-ca nopass
+
+          # Build CA without password
+          ./easyrsa build-ca nopass
+
+          # Generate server certificate request and sign it (non-interactive)
           ./easyrsa gen-req server nopass
           ./easyrsa sign-req server server
+
+          # Generate Diffie-Hellman parameters
           ./easyrsa gen-dh
+
+          # Generate TLS-Auth key
           openvpn --genkey --secret ta.key
 
-          # Create server config
+          # Copy files to OpenVPN directory
           sudo mkdir -p /etc/openvpn/server
           sudo cp pki/ca.crt pki/issued/server.crt pki/private/server.key pki/dh.pem ta.key /etc/openvpn/server
 
+          # Create server configuration
           cat | sudo tee /etc/openvpn/server/server.conf << EOF
           port 1194
           proto udp
@@ -75,13 +87,16 @@ jobs:
       - name: Generate client config for NAT traversal
         run: |
           cd ~/openvpn-ca
+
+          # Generate client certificate (non-interactive)
+          export EASYRSA_BATCH=1
           ./easyrsa gen-req client1 nopass
           ./easyrsa sign-req client client1
 
-          # Build client.ovpn with the user's provided IP and port
           PUBLIC_IP="${{ github.event.inputs.public_ip }}"
           LOCAL_PORT="${{ github.event.inputs.local_port }}"
 
+          # Build client.ovpn
           cat > client.ovpn << EOF
           client
           dev tun
@@ -115,9 +130,7 @@ jobs:
           cat client.ovpn
           echo "=============================================="
 
-      - name: Keep alive and punch NAT
+      - name: Keep alive (5h50m)
         run: |
-          # Keep the runner alive for 5h50m
-          # Also send keepalive packets back to client's public IP to help hole punching
-          # (This is optional but can assist symmetric NATs)
+          echo "OpenVPN server running. Keep alive for 5h50m."
           sleep 21000
