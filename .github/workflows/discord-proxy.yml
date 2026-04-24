@@ -1,45 +1,53 @@
-name: Discord SOCKS5 Proxy
+name: Discord SOCKS5 Proxy (Fixed)
 
 on:
   workflow_dispatch:
     inputs:
       public_ip:
-        description: 'Your public IP address'
+        description: 'Your public IP'
         required: true
       ssh_port:
-        description: 'SSH port on your machine (default: 2222)'
+        description: 'SSH port on your machine (e.g., 2222)'
         required: true
         default: '2222'
+      local_username:
+        description: 'Your local username (e.g., ahmad)'
+        required: true
 
 jobs:
   reverse-proxy:
     runs-on: ubuntu-latest
     steps:
-      - name: Install SSH server on runner and set up reverse tunnel
+      - name: Prepare runner SSH
         run: |
-          # Install SSH server and client
           sudo apt update
           sudo apt install -y openssh-server openssh-client
-
-          # Allow root login with password (temporarily)
-          sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+          # Configure SSH server to allow root password
+          echo "PermitRootLogin yes" | sudo tee /etc/ssh/sshd_config.d/root.conf
+          echo "PasswordAuthentication yes" | sudo tee -a /etc/ssh/sshd_config.d/root.conf
+          echo "KbdInteractiveAuthentication yes" | sudo tee -a /etc/ssh/sshd_config.d/root.conf
           sudo systemctl restart ssh
           echo 'root:tunnel' | sudo chpasswd
+          # Show that SSH is running
+          sudo systemctl status ssh --no-pager
 
-          # Write the private key to a file
+      - name: Set up SSH key and start reverse tunnel
+        run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-
-          # Start the reverse tunnel:
-          # Forward runner’s localhost:2222 to your machine’s localhost:2222
-          # (You’ll later SSH from your machine into the runner’s port 22 through that tunnel)
-          ssh -o StrictHostKeyChecking=no \
-              -N \
-              -R 2222:localhost:22 \
+          # Start reverse tunnel in verbose mode to catch errors
+          ssh -vvv -o StrictHostKeyChecking=no \
+              -o ServerAliveInterval=60 -o ExitOnForwardFailure=yes \
+              -N -R 2222:localhost:22 \
               -p ${{ inputs.ssh_port }} \
-              ahmad@${{ inputs.public_ip }} &
-          # Replace $USER with your local username (e.g., ahmad)
-
-          # Keep the runner alive for 6 hours
+              ${{ inputs.local_username }}@${{ inputs.public_ip }} &
+          sleep 5
+          # Check if tunnel process is still running
+          if pgrep -f "ssh.*-R.*2222" > /dev/null; then
+            echo "Reverse tunnel is established."
+          else
+            echo "ERROR: Reverse tunnel failed. Check the verbose output above."
+          fi
+          # Keep alive
           sleep 21000
