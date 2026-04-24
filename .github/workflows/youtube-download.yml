@@ -1,9 +1,62 @@
-name: Test run
+name: Download YouTube Video
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'YouTube video/playlist URL'
+        required: true
+      format:
+        description: 'Format (leave empty for best quality)'
+        required: false
+        default: 'bestvideo+bestaudio/best'
+      custom_filename:
+        description: 'Custom filename without extension (optional)'
+        required: false
 
 jobs:
-  test:
+  download:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Hello from GitHub Actions!"
+      - name: Install Python Dependencies
+        run: |
+          python3 -m pip install --break-system-packages yt-dlp
+          python3 -m pip install --break-system-packages bgutil-ytdlp-pot-provider
+
+      - name: Download video
+        env:
+          URL: ${{ inputs.url }}
+          FORMAT: ${{ inputs.format }}
+          FILENAME_INPUT: ${{ inputs.custom_filename }}
+        run: |
+          # Decode the base64-encoded cookie secret into a Netscape-formatted cookies.txt file
+          echo "${{ secrets.YOUTUBE_COOKIES }}" | base64 -d > cookies.txt
+          
+          # Build output filename template
+          if [ -n "$FILENAME_INPUT" ]; then
+            OUTPUT_TEMPLATE="${FILENAME_INPUT}.%(ext)s"
+          else
+            OUTPUT_TEMPLATE="%(title)s.%(ext)s"
+          fi
+
+          echo "Downloading: $URL"
+          # Run yt-dlp with the cookies file, preferred format, and JS runtime (Node.js)
+          yt-dlp \
+            --cookies cookies.txt \
+            --format "$FORMAT" \
+            --output "$OUTPUT_TEMPLATE" \
+            --merge-output-format mp4 \
+            --no-playlist \
+            --js-runtimes node \
+            "$URL"
+
+          # Identify the downloaded video file (MP4, WebM, or MKV)
+          DOWNLOADED_FILE=$(ls -t *mp4 *webm *mkv 2>/dev/null | head -1)
+          echo "downloaded_file=$DOWNLOADED_FILE" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-video
+          path: ${{ env.downloaded_file }}
+          retention-days: 3
