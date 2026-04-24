@@ -1,4 +1,4 @@
-name: Download YouTube Video (Cookies + Android Client)
+name: Download YouTube Video (Cookie Header)
 
 on:
   workflow_dispatch:
@@ -29,23 +29,28 @@ jobs:
           sudo apt-get install -y nodejs python3 python3-pip
           pip3 install yt-dlp
 
-      - name: Verify Node.js
-        run: node --version
-
-      - name: Write cookies file from secret
+      - name: Generate cookies.txt from cookie header
         env:
-          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+          COOKIE_RAW: ${{ secrets.YT_COOKIE_HEADER }}
         run: |
-          echo "$YT_COOKIES" > cookies.txt
-          echo "Cookies line count:"
-          wc -l cookies.txt
-          head -1 cookies.txt
-          if grep -q "youtube.com" cookies.txt; then
-            echo "✔ cookies.txt valid"
-          else
-            echo "✘ cookies.txt missing youtube.com – update YT_COOKIES secret!"
-            exit 1
-          fi
+          # Remove any leading "cookie:" or "Cookie:" prefix and trim whitespace
+          CLEAN=$(echo "$COOKIE_RAW" | sed -E 's/^cookie:\s*//i')
+          echo "# Netscape HTTP Cookie File" > cookies.txt
+          echo "# This is a generated file!  Do not edit." >> cookies.txt
+          echo "" >> cookies.txt
+          echo "$CLEAN" | tr -d '\n' | awk '{
+            split($0, pairs, "; ");
+            for (i in pairs) {
+              if (pairs[i] ~ /=/) {
+                split(pairs[i], kv, "=");
+                name = kv[1];
+                value = substr(pairs[i], length(name)+2);
+                printf ".youtube.com\tTRUE\t/\tTRUE\t0\t%s\t%s\n", name, value
+              }
+            }
+          }' >> cookies.txt
+          echo "Generated cookies.txt with $(wc -l < cookies.txt) lines"
+          head -5 cookies.txt
 
       - name: Download video (Android client + cookies)
         run: |
