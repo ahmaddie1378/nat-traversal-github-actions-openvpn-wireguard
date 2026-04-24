@@ -7,7 +7,7 @@ on:
         description: 'YouTube video/playlist URL'
         required: true
       format:
-        description: 'Format (e.g., "bestvideo+bestaudio/best" or "worst") – leave empty for best quality'
+        description: 'Format (e.g., "bestvideo+bestaudio/best" or "worst")'
         required: false
         default: 'bestvideo+bestaudio/best'
       custom_filename:
@@ -18,9 +18,17 @@ jobs:
   download:
     runs-on: ubuntu-latest
     steps:
-      - name: Install yt-dlp
+      - name: Install System Dependencies
+        run: |
+          # Install deno (JavaScript runtime needed for YouTube's bot challenges)
+          sudo apt update
+          sudo apt install -y deno
+
+      - name: Install Python Dependencies
         run: |
           python3 -m pip install --break-system-packages yt-dlp
+          # Install the POT provider plugin that helps bypass YouTube's "Sign in to confirm you’re not a bot" error
+          python3 -m pip install --break-system-packages bgutil-ytdlp-pot-provider
 
       - name: Download video
         env:
@@ -28,7 +36,7 @@ jobs:
           FORMAT: ${{ inputs.format }}
           FILENAME_INPUT: ${{ inputs.custom_filename }}
         run: |
-          # Build yt-dlp command
+          # Build output filename template
           if [ -n "$FILENAME_INPUT" ]; then
             OUTPUT_TEMPLATE="${FILENAME_INPUT}.%(ext)s"
           else
@@ -36,6 +44,7 @@ jobs:
           fi
 
           echo "Downloading: $URL"
+          # The POT provider and deno runtime are now active, so the standard command should work seamlessly
           yt-dlp \
             --format "$FORMAT" \
             --output "$OUTPUT_TEMPLATE" \
@@ -43,7 +52,7 @@ jobs:
             --no-playlist \
             "$URL"
 
-          # Get the actual filename (may contain wildcards if playlist, but we set --no-playlist)
+          # Get the actual filename of the downloaded video
           DOWNLOADED_FILE=$(ls -t *mp4 *webm *mkv 2>/dev/null | head -1)
           echo "downloaded_file=$DOWNLOADED_FILE" >> $GITHUB_ENV
 
