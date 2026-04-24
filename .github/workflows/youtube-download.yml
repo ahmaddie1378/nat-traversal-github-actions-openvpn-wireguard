@@ -1,4 +1,4 @@
-name: Download via Cobalt (DNS‑Proof)
+name: Download YouTube Video (Cookies + Node.js)
 
 on:
   workflow_dispatch:
@@ -7,9 +7,14 @@ on:
         description: 'YouTube video URL'
         required: true
         type: string
+      output_name:
+        description: 'Output filename (without extension)'
+        required: false
+        default: 'video'
+        type: string
 
 jobs:
-  download:
+  download-and-commit:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository (with LFS)
@@ -18,54 +23,61 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           lfs: true
 
-      - name: Install dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y curl jq
-
-      - name: Resolve Cobalt API IP via Google DNS
-        id: resolve
+      - name: Install Node.js and yt-dlp dependencies
         run: |
-          # Query Google DNS over HTTPS for api.cobalt.tools A records
-          DNS_RESPONSE=$(curl -s "https://dns.google/resolve?name=api.cobalt.tools&type=A")
-          IP=$(echo "$DNS_RESPONSE" | jq -r '.Answer[0].data // empty')
-          if [ -z "$IP" ]; then
-            echo "Failed to resolve api.cobalt.tools via Google DNS."
-            exit 1
-          fi
-          echo "Resolved IP: $IP"
-          echo "api_ip=$IP" >> $GITHUB_OUTPUT
+          sudo apt-get update -qq
+          # Node.js is already installed on ubuntu-latest, but we make sure
+          sudo apt-get install -y nodejs python3 python3-pip
+          pip3 install yt-dlp
 
-      - name: Request download from Cobalt (using resolved IP)
-        id: cobalt
+      - name: Verify Node.js version
+        run: node --version
+
+      - name: Write cookies file from secret
+        env:
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
         run: |
-          IP="${{ steps.resolve.outputs.api_ip }}"
-          # Use --resolve to bind the hostname to IP without system DNS
-          RESPONSE=$(curl -sS --max-time 60 \
-            --resolve "api.cobalt.tools:443:$IP" \
-            -X POST "https://api.cobalt.tools/" \
-            -H "Accept: application/json" \
-            -H "Content-Type: application/json" \
-            -d "{\"url\": \"${{ github.event.inputs.video_url }}\", \"videoQuality\": \"720p\", \"downloadMode\": \"auto\"}")
-
-          STATUS=$(echo "$RESPONSE" | jq -r '.status // "error"')
-          if [ "$STATUS" != "redirect" ] && [ "$STATUS" != "tunnel" ]; then
-            echo "Cobalt status: $STATUS"
-            echo "Response: $RESPONSE"
+          echo "$YT_COOKIES" > cookies.txt
+          echo "Cookies file line count:"
+          wc -l cookies.txt
+          echo "First line:"
+          head -1 cookies.txt
+          # Quick sanity check: must contain 'youtube.com'
+          if grep -q "youtube.com" cookies.txt; then
+            echo "✔ cookies.txt looks valid"
+          else
+            echo "✘ cookies.txt does not contain youtube.com – check your secret!"
             exit 1
           fi
 
-          DOWNLOAD_URL=$(echo "$RESPONSE" | jq -r '.url')
-          if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" = "null" ]; then
-            echo "No download URL in response."
-            exit 1
-          fi
-
-          echo "Download URL obtained."
+      - name: Download video (using Node.js runtime)
+        run: |
           mkdir -p videos
-          curl -L -o videos/video.mp4 "$DOWNLOAD_URL"
+          cd videos
+          yt-dlp \
+            --cookies ../cookies.txt \
+            --js-runtimes node \
+            --output "${{ github.event.inputs.output_name }}.%(ext)s" \
+            --format "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+            --merge-output-format mp4 \
+            "${{ github.event.inputs.video_url }}"
 
-      - name: Configure Git and push
+      - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Track video files with LFS
+        run: |
+          git lfs track "*.mp4" "*.webm" "*.mkv"
+          git add .gitattributes
+
+      - name: Commit and push
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
           git add videos/
-          git diff --cached --quiet || (git commit -m "Add video via Cobalt" && git push origin HEAD)
+          git diff --cached --quiet || (
+            git commit -m "Add video: ${{ github.event.inputs.video_url }}" 
+            git push origin HEAD
+          )
