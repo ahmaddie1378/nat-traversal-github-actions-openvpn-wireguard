@@ -1,4 +1,4 @@
-name: Download via Cobalt (Stable)
+name: Download via Cobalt (DNS‑Proof)
 
 on:
   workflow_dispatch:
@@ -18,22 +18,38 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           lfs: true
 
-      - name: Install curl & jq
+      - name: Install dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y curl jq
 
-      - name: Request download from Cobalt
+      - name: Resolve Cobalt API IP via Google DNS
+        id: resolve
+        run: |
+          # Query Google DNS over HTTPS for api.cobalt.tools A records
+          DNS_RESPONSE=$(curl -s "https://dns.google/resolve?name=api.cobalt.tools&type=A")
+          IP=$(echo "$DNS_RESPONSE" | jq -r '.Answer[0].data // empty')
+          if [ -z "$IP" ]; then
+            echo "Failed to resolve api.cobalt.tools via Google DNS."
+            exit 1
+          fi
+          echo "Resolved IP: $IP"
+          echo "api_ip=$IP" >> $GITHUB_OUTPUT
+
+      - name: Request download from Cobalt (using resolved IP)
         id: cobalt
         run: |
-          # Cobalt API: POST a YouTube URL, receive a direct download link
-          RESPONSE=$(curl -sS --max-time 60 -X POST "https://co.wuk.sh/" \
+          IP="${{ steps.resolve.outputs.api_ip }}"
+          # Use --resolve to bind the hostname to IP without system DNS
+          RESPONSE=$(curl -sS --max-time 60 \
+            --resolve "api.cobalt.tools:443:$IP" \
+            -X POST "https://api.cobalt.tools/" \
             -H "Accept: application/json" \
             -H "Content-Type: application/json" \
             -d "{\"url\": \"${{ github.event.inputs.video_url }}\", \"videoQuality\": \"720p\", \"downloadMode\": \"auto\"}")
 
           STATUS=$(echo "$RESPONSE" | jq -r '.status // "error"')
           if [ "$STATUS" != "redirect" ] && [ "$STATUS" != "tunnel" ]; then
-            echo "Cobalt returned status: $STATUS"
-            echo "Full response: $RESPONSE"
+            echo "Cobalt status: $STATUS"
+            echo "Response: $RESPONSE"
             exit 1
           fi
 
@@ -43,7 +59,7 @@ jobs:
             exit 1
           fi
 
-          echo "Download URL: $DOWNLOAD_URL"
+          echo "Download URL obtained."
           mkdir -p videos
           curl -L -o videos/video.mp4 "$DOWNLOAD_URL"
 
