@@ -17,11 +17,16 @@ jobs:
   download-and-commit:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo (with LFS)
+      - name: Checkout repository (with LFS)
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GH_PAT }}
           lfs: true
+
+      - name: Install Deno (JavaScript runtime for yt-dlp)
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -31,11 +36,20 @@ jobs:
       - name: Install yt-dlp
         run: pip install yt-dlp
 
+      - name: Write YouTube cookies from secret
+        env:
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: |
+          echo "$YT_COOKIES" > cookies.txt
+          # Make sure the file was created and is not empty
+          wc -c cookies.txt
+
       - name: Download video
         run: |
           mkdir -p videos
           cd videos
           yt-dlp \
+            --cookies ../cookies.txt \
             --output "${{ github.event.inputs.output_name }}.%(ext)s" \
             --format "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
             --merge-output-format mp4 \
@@ -46,11 +60,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Track files with LFS
+      - name: Track video files with LFS
         run: |
-          # Ensure Git LFS is tracking common video extensions
           git lfs track "*.mp4" "*.webm" "*.mkv"
-          # If a .gitattributes was already tracked, this will update it
           git add .gitattributes
 
       - name: Commit and push
