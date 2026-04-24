@@ -1,37 +1,40 @@
-name: Download Blocked File (Base64)
+name: Download Blocked File
 
 on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'URL of the file to download'
+        description: 'Direct URL of the file you want (must be publicly accessible)'
         required: true
-        type: string
       filename:
-        description: 'Optional: save as this filename (used for decoder hint)'
+        description: 'Filename to save as (optional – leave empty to use name from URL)'
         required: false
-        type: string
 
 jobs:
-  download:
+  fetch:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write          # allow pushing to repo
     steps:
-      - name: Download file
-        run: |
-          URL="${{ github.event.inputs.url }}"
-          if [ -n "${{ github.event.inputs.filename }}" ]; then
-            FILENAME="${{ github.event.inputs.filename }}"
-          else
-            FILENAME=$(basename "$URL" | cut -d'?' -f1)
-          fi
-          wget -O "$FILENAME" "$URL"
-          echo "TARGET_FILENAME=$FILENAME" >> $GITHUB_ENV
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Output base64
+      - name: Download the file
         run: |
-          echo "===== BASE64 OF $TARGET_FILENAME ====="
-          base64 -w0 "$TARGET_FILENAME"
-          echo ""
-          echo "===== END BASE64 ====="
-          echo "Copy the base64 block above (between the markers) and decode it locally with:"
-          echo "  base64 -d < copied_text > $TARGET_FILENAME"
+          URL="${{ inputs.url }}"
+          if [ -n "${{ inputs.filename }}" ]; then
+            FILENAME="${{ inputs.filename }}"
+          else
+            FILENAME=$(basename "$URL" | cut -d '?' -f1)
+          fi
+          echo "Downloading $URL => $FILENAME"
+          # Use wget, fallback to curl
+          wget --timeout=30 -q -O "$FILENAME" "$URL" || curl -L --max-time 30 -o "$FILENAME" "$URL"
+
+      - name: Commit file to repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Download: $FILENAME" || echo "Nothing to commit"
+          git push
