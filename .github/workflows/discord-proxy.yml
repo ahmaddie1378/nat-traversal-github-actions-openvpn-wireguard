@@ -1,52 +1,57 @@
-name: Discord SOCKS5 Proxy (Direct)
+name: Discord TCP Reverse Tunnel
 
 on:
   workflow_dispatch:
+    inputs:
+      public_ip:
+        description: 'Your public IP'
+        required: true
 
 jobs:
-  ssh-server:
+  connect:
     runs-on: ubuntu-latest
     steps:
-      - name: Setup SSH server on runner
+      - name: Install prerequisites and start reverse TCP tunnel
         run: |
-          sudo apt-get update
-          sudo apt-get install -y openssh-server curl
+          sudo apt update
+          sudo apt install -y openssh-server
 
-          # Write SSH configuration
-          sudo tee /etc/ssh/sshd_config.d/direct.conf << EOF
-          Port 443
-          PermitRootLogin yes
-          PasswordAuthentication yes
-          KbdInteractiveAuthentication yes
+          # Configure SSH server to allow root login with password
+          echo "PermitRootLogin yes" | sudo tee /etc/ssh/sshd_config.d/root.conf
+          echo "PasswordAuthentication yes" | sudo tee -a /etc/ssh/sshd_config.d/root.conf
+          echo "root:tunnel" | sudo chpasswd
+          sudo systemctl restart ssh
+
+          # Create a Python script that connects to your IP:443 and forwards runner's port 22
+          cat > forward.py << 'EOF'
+          import socket, time, sys
+          target_host = sys.argv[1]
+          target_port = int(sys.argv[2])
+
+          while True:
+              try:
+                  client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                  client.connect((target_host, target_port))
+                  # Once connected, create a bidirectional pipe to local SSH
+                  server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                  server.connect(('127.0.0.1', 22))
+                  import threading
+                  def pipe(src, dst):
+                      while True:
+                          data = src.recv(4096)
+                          if not data:
+                              break
+                          dst.sendall(data)
+                  threading.Thread(target=pipe, args=(client, server), daemon=True).start()
+                  threading.Thread(target=pipe, args=(server, client), daemon=True).start()
+              except Exception as e:
+                  print("Error:", e)
+                  time.sleep(10)
           EOF
 
-          # Set a temporary root password (change 'discordproxy2026' if you like)
-          echo "root:discordproxy2026" | sudo chpasswd
+          # Run the forwarder in the background, connecting to your public IP on port 443
+          python3 forward.py ${{ inputs.public_ip }} 443 &
+          echo "Reverse TCP connector started."
 
-      - name: Restart SSH and get runner IP
-        run: |
-          # IMPORTANT: Ubuntu uses 'ssh' not 'sshd'
-          sudo systemctl restart ssh
-          sudo systemctl status ssh --no-pager --lines=0
-
-          # Wait a moment for the service to settle
-          sleep 2
-
-          # Get the runner's public IP (try multiple services)
-          RUNNER_IP=$(curl -s --max-time 5 ifconfig.me || curl -s --max-time 5 ipinfo.io/ip || curl -s --max-time 5 icanhazip.com)
-          if [ -z "$RUNNER_IP" ]; then
-            echo "ERROR: Could not determine runner IP. Check network."
-            exit 1
-          fi
-
-          echo ""
-          echo "=============================================="
-          echo " RUNNER IS READY"
-          echo " Use this command on your local machine:"
-          echo "=============================================="
-          echo "ssh -o StrictHostKeyChecking=no -D 1080 -p 443 root@${RUNNER_IP}"
-          echo "Password: discordproxy2026"
-          echo "=============================================="
-
-      - name: Keep alive for 6 hours
-        run: sleep 21600
+          # Keep alive 6 hours
+          sleep 21000
