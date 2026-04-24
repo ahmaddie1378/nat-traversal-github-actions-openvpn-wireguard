@@ -1,4 +1,4 @@
-name: Download YouTube Video (Cobalt Strategy)
+name: Download YouTube Video (No Login, Piped Strategy)
 
 on:
   workflow_dispatch:
@@ -7,39 +7,101 @@ on:
         description: 'YouTube Video URL'
         required: true
         type: string
+      output_name:
+        description: 'Output filename (without extension)'
+        required: false
+        default: 'video'
+        type: string
 
 jobs:
-  download:
+  download-and-commit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y curl jq
-      - name: Request download from Cobalt API
-        id: cobalt
-        run: |
-          RESPONSE=$(curl -sS --max-time 30 -X POST "https://co.wuk.sh/" \
-            -H "Accept: application/json" \
-            -H "Content-Type: application/json" \
-            -d '{"url": "${{ github.event.inputs.video_url }}", "videoQuality": "720p", "downloadMode": "auto"}')
-          echo "Raw response: $RESPONSE"
-          STATUS=$(echo "$RESPONSE" | jq -r '.status // "error"')
-          if [ "$STATUS" != "redirect" ] && [ "$STATUS" != "tunnel" ]; then
-            echo "Cobalt failed with status: $STATUS"
-            exit 1
-          fi
-          DOWNLOAD_URL=$(echo "$RESPONSE" | jq -r '.url')
-          if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" = "null" ]; then
-            echo "Failed to get download URL."
-            exit 1
-          fi
-          echo "Download URL: $DOWNLOAD_URL"
-          mkdir -p videos
-          curl -L -o videos/video.mp4 "$DOWNLOAD_URL"
+      - name: Checkout repository (with LFS)
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+          lfs: true
 
-      - name: Commit and push
+      - name: Install dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg curl jq
+
+      - name: Extract video ID
+        id: extract-id
+        run: |
+          URL="${{ github.event.inputs.video_url }}"
+          ID=$(echo "$URL" | grep -oP '(?<=v=|\/embed\/|\/v\/|youtu\.be\/)[a-zA-Z0-9_-]{11}' | head -1)
+          echo "video_id=$ID" >> $GITHUB_OUTPUT
+
+      - name: Fetch & Download from Piped API
+        id: fetch
+        run: |
+          ID="${{ steps.extract-id.outputs.video_id }}"
+          # A list of known Piped instances
+          INSTANCES=(
+            "https://pipedapi.kavin.rocks"
+            "https://pipedapi.adminforge.de"
+            "https://api.piped.yt"
+            "https://pipedapi.leptons.xyz"
+            "https://piped-api.privacy.com.de"
+            "https://pipedapi.drgns.space"
+          )
+          WORKING_INSTANCE=""
+          RESPONSE=""
+          for INST in "${INSTANCES[@]}"; do
+            echo "Trying Piped instance: $INST"
+            RESPONSE=$(curl -sS --max-time 20 "$INST/streams/$ID" 2>/dev/null || true)
+            if [ -z "$RESPONSE" ]; then
+              echo "Empty response from $INST."
+              continue
+            fi
+            # Check if it's valid JSON with a title
+            TITLE=$(echo "$RESPONSE" | jq -r '.title // empty')
+            if [ -n "$TITLE" ]; then
+              WORKING_INSTANCE="$INST"
+              echo "Success with $INST"
+              break
+            else
+              echo "Invalid response from $INST."
+            fi
+          done
+          if [ -z "$WORKING_INSTANCE" ]; then
+            echo "No working Piped instance found."
+            exit 1
+          fi
+
+          # Parse URLs for video (with audio) and audio-only streams
+          VIDEO_URL=$(echo "$RESPONSE" | jq -r '.videoStreams[] | select(.quality == "720p" or .quality == "1080p") | .url' | head -1)
+          AUDIO_URL=$(echo "$RESPONSE" | jq -r '.audioStreams[] | select(.quality == "128 kbps" or .quality == "medium") | .url' | head -1)
+
+          mkdir -p videos
+          cd videos
+          OUTPUT_NAME="${{ github.event.inputs.output_name }}"
+          if [ -n "$VIDEO_URL" ] && [ -n "$AUDIO_URL" ]; then
+            echo "Downloading video and audio separately..."
+            curl -L -o video_temp.mp4 "$VIDEO_URL"
+            curl -L -o audio_temp.m4a "$AUDIO_URL"
+            ffmpeg -i video_temp.mp4 -i audio_temp.m4a -c copy "${OUTPUT_NAME}.mp4"
+            rm video_temp.mp4 audio_temp.m4a
+          elif [ -n "$VIDEO_URL" ]; then
+            echo "Downloading video-only stream..."
+            curl -L -o "${OUTPUT_NAME}.mp4" "$VIDEO_URL"
+          else
+            echo "Could not find downloadable streams."
+            exit 1
+          fi
+
+      - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit and push
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
           git add videos/
-          git diff --cached --quiet || (git commit -m "Add video via Cobalt" && git push origin HEAD)
+          git diff --cached --quiet || (
+            git commit -m "Add video via Piped: ${{ github.event.inputs.video_url }}"
+            git push origin HEAD
+          )
