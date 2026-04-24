@@ -1,0 +1,55 @@
+name: Download YouTube Video
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'YouTube video/playlist URL'
+        required: true
+      format:
+        description: 'Format (e.g., "bestvideo+bestaudio/best" or "worst") – leave empty for best quality'
+        required: false
+        default: 'bestvideo+bestaudio/best'
+      custom_filename:
+        description: 'Custom filename without extension (optional)'
+        required: false
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install yt-dlp
+        run: |
+          python3 -m pip install --break-system-packages yt-dlp
+
+      - name: Download video
+        env:
+          URL: ${{ inputs.url }}
+          FORMAT: ${{ inputs.format }}
+          FILENAME_INPUT: ${{ inputs.custom_filename }}
+        run: |
+          # Build yt-dlp command
+          if [ -n "$FILENAME_INPUT" ]; then
+            OUTPUT_TEMPLATE="${FILENAME_INPUT}.%(ext)s"
+          else
+            OUTPUT_TEMPLATE="%(title)s.%(ext)s"
+          fi
+
+          echo "Downloading: $URL"
+          yt-dlp \
+            --format "$FORMAT" \
+            --output "$OUTPUT_TEMPLATE" \
+            --merge-output-format mp4 \
+            --no-playlist \
+            "$URL"
+
+          # Get the actual filename (may contain wildcards if playlist, but we set --no-playlist)
+          DOWNLOADED_FILE=$(ls -t *mp4 *webm *mkv 2>/dev/null | head -1)
+          echo "downloaded_file=$DOWNLOADED_FILE" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-video
+          path: ${{ env.downloaded_file }}
+          retention-days: 3
