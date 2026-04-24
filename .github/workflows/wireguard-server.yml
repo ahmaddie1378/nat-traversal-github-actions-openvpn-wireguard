@@ -1,31 +1,36 @@
-name: Reverse TCP Tunnel (bash)
+name: Download Blocked File
 
 on:
   workflow_dispatch:
     inputs:
-      public_ip:
-        description: 'Your public IP address'
+      url:
+        description: 'https://release-assets.githubusercontent.com/github-production-release-asset/395090937/847684ea-e469-4de1-91da-780a190c4c44?sp=r&sv=2018-11-09&sr=b&spr=https&se=2026-04-24T01%3A28%3A27Z&rscd=attachment%3B+filename%3DWindscribe_2.21.7_amd64.exe&rsct=application%2Foctet-stream&skoid=96c2d410-5711-43a1-aedd-ab1947aa7ab0&sktid=398a6654-997b-47e9-b12b-9515b896b4de&skt=2026-04-24T00%3A27%3A45Z&ske=2026-04-24T01%3A28%3A27Z&sks=b&skv=2018-11-09&sig=ttdD48aB1y8%2BTjzstx80pAwxddDQF9Na210Ae1GM%2B3w%3D&jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmVsZWFzZS1hc3NldHMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIiwia2V5Ijoia2V5MSIsImV4cCI6MTc3Njk5MjQxMSwibmJmIjoxNzc2OTkwNjExLCJwYXRoIjoicmVsZWFzZWFzc2V0cHJvZHVjdGlvbi5ibG9iLmNvcmUud2luZG93cy5uZXQifQ.0Iet7lc0h7xlm350wIqXqsDeWL4LG1jF4Tk_8G_P2L4&response-content-disposition=attachment%3B%20filename%3DWindscribe_2.21.7_amd64.exe&response-content-type=application%2Foctet-stream'
         required: true
         type: string
-      port:
-        description: 'TCP port on your machine (e.g., 25555)'
-        required: true
+      filename:
+        description: 'Optional: save as this filename'
+        required: false
         type: string
 
 jobs:
-  connect:
+  download:
     runs-on: ubuntu-latest
     steps:
-      - name: Connect back to user via bash TCP
+      - name: Download file
         run: |
-          echo "Connecting to ${{ inputs.public_ip }}:${{ inputs.port }}"
-          while true; do
-            # Create a 2-way pipe: runner -> your machine
-            # We'll forward local SSH (port 22) back through the tunnel
-            bash -c "
-              exec 3<>/dev/tcp/${{ inputs.public_ip }}/${{ inputs.port }}
-              cat <&3 &
-              cat >&3
-            " || sleep 5
-          done &
-          sleep 21000
+          URL="${{ github.event.inputs.url }}"
+          if [ -n "${{ github.event.inputs.filename }}" ]; then
+            FILENAME="${{ github.event.inputs.filename }}"
+          else
+            # Extract filename from URL
+            FILENAME=$(basename "$URL" | sed 's/\?.*//')
+          fi
+          echo "Downloading $URL as $FILENAME"
+          wget -O "$FILENAME" "$URL"
+
+      - name: Upload as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: downloaded-file
+          path: ./*
+          retention-days: 1   # Artifact expires after 1 day (free tier allows up to 90)
