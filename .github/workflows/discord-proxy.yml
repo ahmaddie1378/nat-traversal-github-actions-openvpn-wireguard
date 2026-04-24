@@ -1,0 +1,45 @@
+name: Discord SOCKS5 Proxy
+
+on:
+  workflow_dispatch:
+    inputs:
+      public_ip:
+        description: 'Your public IP address'
+        required: true
+      ssh_port:
+        description: 'SSH port on your machine (default: 2222)'
+        required: true
+        default: '2222'
+
+jobs:
+  reverse-proxy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install SSH server on runner and set up reverse tunnel
+        run: |
+          # Install SSH server and client
+          sudo apt update
+          sudo apt install -y openssh-server openssh-client
+
+          # Allow root login with password (temporarily)
+          sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+          echo 'root:tunnel' | sudo chpasswd
+
+          # Write the private key to a file
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          # Start the reverse tunnel:
+          # Forward runner’s localhost:2222 to your machine’s localhost:2222
+          # (You’ll later SSH from your machine into the runner’s port 22 through that tunnel)
+          ssh -o StrictHostKeyChecking=no \
+              -N \
+              -R 2222:localhost:22 \
+              -p ${{ inputs.ssh_port }} \
+              $USER@${{ inputs.public_ip }} &
+          # Replace $USER with your local username (e.g., ahmad)
+
+          # Keep the runner alive for 6 hours
+          sleep 21000
