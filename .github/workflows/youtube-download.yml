@@ -1,28 +1,9 @@
-      - name: Download video
-        env:
-          URL: ${{ inputs.url }}
-          FORMAT: ${{ inputs.format }}
-          FILENAME_INPUT: ${{ inputs.custom_filename }}
-        run: |
-          # Decode the cookies from the base64-encoded secret
-          echo "${{ secrets.YOUTUBE_COOKIES }}" | base64 -d > cookies.txt
-          
-          # Output filename template
-          if [ -n "$FILENAME_INPUT" ]; then
-            OUTPUT_TEMPLATE="${FILENAME_INPUT}.%(ext)s"
-          else
-            OUTPUT_TEMPLATE="%(title)s.%(ext)s"
-          fi
+name: Test run
 
-          echo "Downloading: $URL"
-          yt-dlp \
-            --cookies cookies.txt \
-            --format "$FORMAT" \
-            --output "$OUTPUT_TEMPLATE" \
-            --merge-output-format mp4 \
-            --no-playlist \
-            "$URL"
+on: workflow_dispatch
 
-          # Get the actual filename
-          DOWNLOADED_FILE=$(ls -t *mp4 *webm *mkv 2>/dev/null | head -1)
-          echo "downloaded_file=$DOWNLOADED_FILE" >> $GITHUB_ENV
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Hello from GitHub Actions!"
