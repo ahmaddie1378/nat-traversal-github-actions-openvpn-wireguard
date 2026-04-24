@@ -1,4 +1,4 @@
-name: Download YouTube Video (No Login)
+name: Download YouTube Video (No Login, Automatic Instance)
 
 on:
   workflow_dispatch:
@@ -12,11 +12,6 @@ on:
         required: false
         default: 'video'
         type: string
-      invidious_instance:
-        description: 'Invidious instance (leave default for auto-select)'
-        required: false
-        default: 'https://inv.nadeko.net'
-        type: string
 
 jobs:
   download-and-commit:
@@ -28,51 +23,57 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           lfs: true
 
-      - name: Install ffmpeg and curl
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg curl jq
+      - name: Install dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg curl jq
 
-      - name: Extract video ID from URL
+      - name: Extract video ID
         id: extract-id
         run: |
           URL="${{ github.event.inputs.video_url }}"
-          # Extract video ID (handles watch?v=, youtu.be/ and /embed/)
           ID=$(echo "$URL" | grep -oP '(?<=v=|\/embed\/|\/v\/|youtu\.be\/)[a-zA-Z0-9_-]{11}' | head -1)
           if [ -z "$ID" ]; then
-            echo "Could not parse video ID from URL: $URL"
+            echo "Could not parse video ID from: $URL"
             exit 1
           fi
           echo "video_id=$ID" >> $GITHUB_OUTPUT
           echo "Video ID: $ID"
 
-      - name: Fetch download links from Invidious API
+      - name: Fetch download URLs from Invidious
         id: fetch
         run: |
-          INSTANCE="${{ github.event.inputs.invidious_instance }}"
           ID="${{ steps.extract-id.outputs.video_id }}"
-          echo "Using Invidious instance: $INSTANCE"
-          
-          # Get video info (JSON)
-          RESPONSE=$(curl -s "$INSTANCE/api/v1/videos/$ID")
-          if echo "$RESPONSE" | grep -q "error"; then
-            echo "Instance returned error, trying alternative..."
-            # Fallback instances
-            for ALT in "https://inv.us.projectsegfau.lt" "https://invidious.slipfox.xyz" "https://vid.puffyan.us"; do
-              echo "Trying $ALT"
-              RESPONSE=$(curl -s "$ALT/api/v1/videos/$ID")
-              if echo "$RESPONSE" | grep -q "error"; then
-                continue
-              else
-                INSTANCE="$ALT"
-                break
-              fi
-            done
+          # Ordered list of instances (they go up and down; adjust as needed)
+          INSTANCES=(
+            "https://inv.us.projectsegfau.lt"
+            "https://invidious.slipfox.xyz"
+            "https://vid.puffyan.us"
+            "https://inv.nadeko.net"
+            "https://invidious.privacydev.net"
+            "https://yt.artemislena.eu"
+            "https://invidious.flokinet.to"
+          )
+
+          RESPONSE=""
+          WORKING_INSTANCE=""
+          for INST in "${INSTANCES[@]}"; do
+            echo "Trying $INST..."
+            RESPONSE=$(curl -sS --max-time 15 "$INST/api/v1/videos/$ID" || echo "")
+            # Check if it’s valid JSON (jq will fail silently otherwise)
+            if echo "$RESPONSE" | jq empty >/dev/null 2>&1; then
+              WORKING_INSTANCE="$INST"
+              echo "Success with $INST"
+              break
+            fi
+            echo "$INST returned non-JSON or error"
+          done
+
+          if [ -z "$WORKING_INSTANCE" ]; then
+            echo "All instances failed. Last response (truncated):"
+            echo "$RESPONSE" | head -20
+            exit 1
           fi
 
-          # Choose the best combined (progressive) format or separate video+audio
-          # Invidious returns "formatStreams" (progressive) and "adaptiveFormats" (dash)
-          # Prefer a high-quality progressive stream (video+audio in one file)
+          # Now safe to parse with jq
           VIDEO_URL=$(echo "$RESPONSE" | jq -r '
             .formatStreams
             | map(select(.container == "mp4") | select(.qualityLabel != null))
@@ -81,12 +82,9 @@ jobs:
             | .url
           ')
 
-          if [ "$VIDEO_URL" != "null" ] && [ -n "$VIDEO_URL" ]; then
-            echo "Found progressive MP4: $VIDEO_URL"
-            echo "download_url=$VIDEO_URL" >> $GITHUB_OUTPUT
-            echo "needs_merge=false" >> $GITHUB_OUTPUT
-          else
-            # No progressive stream, get best video and best audio separately
+          NEEDS_MERGE=false
+          if [ "$VIDEO_URL" = "null" ] || [ -z "$VIDEO_URL" ]; then
+            # No progressive stream → get best video + best audio
             BEST_VIDEO=$(echo "$RESPONSE" | jq -r '
               .adaptiveFormats
               | map(select(.type | startswith("video")) | select(.container == "mp4"))
@@ -96,23 +94,26 @@ jobs:
             ')
             BEST_AUDIO=$(echo "$RESPONSE" | jq -r '
               .adaptiveFormats
-              | map(select(.type | startswith("audio")) | select(.container == "webm") or select(.container == "m4a"))
+              | map(select(.type | startswith("audio")) | select(.container == "webm" or .container == "m4a"))
               | sort_by(.bitrate | tonumber)
               | last
               | .url
             ')
             if [ "$BEST_VIDEO" = "null" ] || [ "$BEST_AUDIO" = "null" ]; then
-              echo "Could not find downloadable streams."
+              echo "Could not find any downloadable streams."
               exit 1
             fi
             echo "video_url=$BEST_VIDEO" >> $GITHUB_OUTPUT
             echo "audio_url=$BEST_AUDIO" >> $GITHUB_OUTPUT
-            echo "needs_merge=true" >> $GITHUB_OUTPUT
+            NEEDS_MERGE=true
+          else
+            echo "download_url=$VIDEO_URL" >> $GITHUB_OUTPUT
           fi
 
-          # Save title for commit message (optional)
+          echo "needs_merge=$NEEDS_MERGE" >> $GITHUB_OUTPUT
           TITLE=$(echo "$RESPONSE" | jq -r '.title')
           echo "title=$TITLE" >> $GITHUB_OUTPUT
+          echo "Video title: $TITLE"
 
       - name: Download video
         run: |
@@ -120,24 +121,21 @@ jobs:
           cd videos
           OUTPUT_NAME="${{ github.event.inputs.output_name }}"
           if [ "${{ steps.fetch.outputs.needs_merge }}" = "false" ]; then
-            # Single progressive file
             curl -L -o "${OUTPUT_NAME}.mp4" "${{ steps.fetch.outputs.download_url }}"
           else
-            # Separate video and audio streams
             curl -L -o video_temp.mp4 "${{ steps.fetch.outputs.video_url }}"
             curl -L -o audio_temp.m4a "${{ steps.fetch.outputs.audio_url }}"
-            # Merge with ffmpeg (copy codec, no re-encoding)
             ffmpeg -i video_temp.mp4 -i audio_temp.m4a -c copy "${OUTPUT_NAME}.mp4"
             rm video_temp.mp4 audio_temp.m4a
           fi
-          echo "Download complete: ${OUTPUT_NAME}.mp4"
+          echo "File saved as: ${OUTPUT_NAME}.mp4"
 
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Track video file with LFS
+      - name: Track videos with LFS
         run: |
           git lfs track "*.mp4" "*.webm" "*.mkv"
           git add .gitattributes
