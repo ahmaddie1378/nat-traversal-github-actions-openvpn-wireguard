@@ -9,10 +9,10 @@ jobs:
     steps:
       - name: Setup SSH server on runner
         run: |
-          sudo apt update
-          sudo apt install -y openssh-server curl
+          sudo apt-get update
+          sudo apt-get install -y openssh-server curl
 
-          # Configure SSH server
+          # Write SSH configuration
           sudo tee /etc/ssh/sshd_config.d/direct.conf << EOF
           Port 443
           PermitRootLogin yes
@@ -20,14 +20,26 @@ jobs:
           KbdInteractiveAuthentication yes
           EOF
 
-          # Set a temporary root password (change 'discordproxy2026' to something you like)
+          # Set a temporary root password (change 'discordproxy2026' if you like)
           echo "root:discordproxy2026" | sudo chpasswd
 
-          sudo systemctl restart sshd
-
-      - name: Get runner public IP
+      - name: Restart SSH and get runner IP
         run: |
-          RUNNER_IP=$(curl -s ifconfig.me || curl -s ipinfo.io/ip || curl -s icanhazip.com)
+          # IMPORTANT: Ubuntu uses 'ssh' not 'sshd'
+          sudo systemctl restart ssh
+          sudo systemctl status ssh --no-pager --lines=0
+
+          # Wait a moment for the service to settle
+          sleep 2
+
+          # Get the runner's public IP (try multiple services)
+          RUNNER_IP=$(curl -s --max-time 5 ifconfig.me || curl -s --max-time 5 ipinfo.io/ip || curl -s --max-time 5 icanhazip.com)
+          if [ -z "$RUNNER_IP" ]; then
+            echo "ERROR: Could not determine runner IP. Check network."
+            exit 1
+          fi
+
+          echo ""
           echo "=============================================="
           echo " RUNNER IS READY"
           echo " Use this command on your local machine:"
