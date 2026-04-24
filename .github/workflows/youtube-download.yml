@@ -18,16 +18,10 @@ jobs:
   download:
     runs-on: ubuntu-latest
     steps:
-      - name: Install System Dependencies
-        run: |
-          # Install deno (JavaScript runtime needed for YouTube's bot challenges)
-          sudo apt update
-          sudo apt install -y deno
-
       - name: Install Python Dependencies
         run: |
           python3 -m pip install --break-system-packages yt-dlp
-          # Install the POT provider plugin that helps bypass YouTube's "Sign in to confirm you’re not a bot" error
+          # PO Token provider plugin (handles “Sign in to confirm you’re not a bot”)
           python3 -m pip install --break-system-packages bgutil-ytdlp-pot-provider
 
       - name: Download video
@@ -36,7 +30,7 @@ jobs:
           FORMAT: ${{ inputs.format }}
           FILENAME_INPUT: ${{ inputs.custom_filename }}
         run: |
-          # Build output filename template
+          # Output filename
           if [ -n "$FILENAME_INPUT" ]; then
             OUTPUT_TEMPLATE="${FILENAME_INPUT}.%(ext)s"
           else
@@ -44,15 +38,16 @@ jobs:
           fi
 
           echo "Downloading: $URL"
-          # The POT provider and deno runtime are now active, so the standard command should work seamlessly
+          # Node.js is already installed – use it as JavaScript runtime
           yt-dlp \
             --format "$FORMAT" \
             --output "$OUTPUT_TEMPLATE" \
             --merge-output-format mp4 \
             --no-playlist \
+            --js-runtimes node \
             "$URL"
 
-          # Get the actual filename of the downloaded video
+          # Get the downloaded filename
           DOWNLOADED_FILE=$(ls -t *mp4 *webm *mkv 2>/dev/null | head -1)
           echo "downloaded_file=$DOWNLOADED_FILE" >> $GITHUB_ENV
 
