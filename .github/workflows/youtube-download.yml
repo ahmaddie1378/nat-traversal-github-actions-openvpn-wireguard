@@ -7,7 +7,7 @@ on:
         description: 'YouTube video/playlist URL'
         required: true
       format:
-        description: 'Format (e.g., "bestvideo+bestaudio/best" or "worst")'
+        description: 'Format (leave empty for best quality)'
         required: false
         default: 'bestvideo+bestaudio/best'
       custom_filename:
@@ -21,7 +21,7 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python3 -m pip install --break-system-packages yt-dlp
-          # PO Token provider plugin (handles “Sign in to confirm you’re not a bot”)
+          # A powerful plugin that helps generate necessary tokens for YouTube
           python3 -m pip install --break-system-packages bgutil-ytdlp-pot-provider
 
       - name: Download video
@@ -30,7 +30,10 @@ jobs:
           FORMAT: ${{ inputs.format }}
           FILENAME_INPUT: ${{ inputs.custom_filename }}
         run: |
-          # Output filename
+          # Create the cookies file from the secret
+          echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
+          
+          # Output filename template
           if [ -n "$FILENAME_INPUT" ]; then
             OUTPUT_TEMPLATE="${FILENAME_INPUT}.%(ext)s"
           else
@@ -38,16 +41,16 @@ jobs:
           fi
 
           echo "Downloading: $URL"
-          # Node.js is already installed – use it as JavaScript runtime
+          # Run yt-dlp with the cookies file and the JS runtime
           yt-dlp \
+            --cookies cookies.txt \
             --format "$FORMAT" \
             --output "$OUTPUT_TEMPLATE" \
             --merge-output-format mp4 \
             --no-playlist \
-            --js-runtimes node \
             "$URL"
 
-          # Get the downloaded filename
+          # Get the actual filename of the downloaded video
           DOWNLOADED_FILE=$(ls -t *mp4 *webm *mkv 2>/dev/null | head -1)
           echo "downloaded_file=$DOWNLOADED_FILE" >> $GITHUB_ENV
 
