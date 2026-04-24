@@ -1,4 +1,4 @@
-name: Discord TCP Reverse Tunnel
+name: Discord Reverse TCP Tunnel
 
 on:
   workflow_dispatch:
@@ -11,47 +11,43 @@ jobs:
   connect:
     runs-on: ubuntu-latest
     steps:
-      - name: Install prerequisites and start reverse TCP tunnel
+      - name: Install and configure SSH server
         run: |
-          sudo apt update
-          sudo apt install -y openssh-server
-
-          # Configure SSH server to allow root login with password
-          echo "PermitRootLogin yes" | sudo tee /etc/ssh/sshd_config.d/root.conf
-          echo "PasswordAuthentication yes" | sudo tee -a /etc/ssh/sshd_config.d/root.conf
+          sudo apt-get update
+          sudo apt-get install -y openssh-server
+          sudo tee /etc/ssh/sshd_config.d/discord.conf << EOF
+          Port 22
+          PermitRootLogin yes
+          PasswordAuthentication yes
+          KbdInteractiveAuthentication yes
+          EOF
           echo "root:tunnel" | sudo chpasswd
           sudo systemctl restart ssh
 
-          # Create a Python script that connects to your IP:443 and forwards runner's port 22
-          cat > forward.py << 'EOF'
+      - name: Start reverse TCP connector
+        run: |
+          cat > connect.py << 'EOF'
           import socket, time, sys
           target_host = sys.argv[1]
           target_port = int(sys.argv[2])
-
           while True:
               try:
                   client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                   client.connect((target_host, target_port))
-                  # Once connected, create a bidirectional pipe to local SSH
                   server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                   server.connect(('127.0.0.1', 22))
                   import threading
                   def pipe(src, dst):
                       while True:
                           data = src.recv(4096)
-                          if not data:
-                              break
+                          if not data: break
                           dst.sendall(data)
                   threading.Thread(target=pipe, args=(client, server), daemon=True).start()
                   threading.Thread(target=pipe, args=(server, client), daemon=True).start()
               except Exception as e:
-                  print("Error:", e)
+                  print("Retrying in 10s:", e)
                   time.sleep(10)
           EOF
-
-          # Run the forwarder in the background, connecting to your public IP on port 443
-          python3 forward.py ${{ inputs.public_ip }} 443 &
-          echo "Reverse TCP connector started."
-
-          # Keep alive 6 hours
+          python3 connect.py ${{ inputs.public_ip }} 443 &
+          echo "Connector started."
           sleep 21000
