@@ -1,4 +1,4 @@
-name: Download Blocked File
+name: Download Blocked File (Base64)
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       filename:
-        description: 'Optional: save as this filename'
+        description: 'Optional: save as this filename (used for decoder hint)'
         required: false
         type: string
 
@@ -22,15 +22,16 @@ jobs:
           if [ -n "${{ github.event.inputs.filename }}" ]; then
             FILENAME="${{ github.event.inputs.filename }}"
           else
-            # Extract filename from URL
-            FILENAME=$(basename "$URL" | sed 's/\?.*//')
+            FILENAME=$(basename "$URL" | cut -d'?' -f1)
           fi
-          echo "Downloading $URL as $FILENAME"
           wget -O "$FILENAME" "$URL"
+          echo "TARGET_FILENAME=$FILENAME" >> $GITHUB_ENV
 
-      - name: Upload as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: downloaded-file
-          path: ./*
-          retention-days: 1   # Artifact expires after 1 day (free tier allows up to 90)
+      - name: Output base64
+        run: |
+          echo "===== BASE64 OF $TARGET_FILENAME ====="
+          base64 -w0 "$TARGET_FILENAME"
+          echo ""
+          echo "===== END BASE64 ====="
+          echo "Copy the base64 block above (between the markers) and decode it locally with:"
+          echo "  base64 -d < copied_text > $TARGET_FILENAME"
