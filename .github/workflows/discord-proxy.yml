@@ -38,7 +38,7 @@ jobs:
               -N \
               -R 2222:localhost:22 \
               -p ${{ inputs.ssh_port }} \
-              $USER@${{ inputs.public_ip }} &
+              ahmad@${{ inputs.public_ip }} &
           # Replace $USER with your local username (e.g., ahmad)
 
           # Keep the runner alive for 6 hours
