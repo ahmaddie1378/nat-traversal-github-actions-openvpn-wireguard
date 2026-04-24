@@ -1,37 +1,11 @@
-name: Download YouTube Video
-
-on:
-  workflow_dispatch:
-    inputs:
-      url:
-        description: 'YouTube video/playlist URL'
-        required: true
-      format:
-        description: 'Format (leave empty for best quality)'
-        required: false
-        default: 'bestvideo+bestaudio/best'
-      custom_filename:
-        description: 'Custom filename without extension (optional)'
-        required: false
-
-jobs:
-  download:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install Python Dependencies
-        run: |
-          python3 -m pip install --break-system-packages yt-dlp
-          # A powerful plugin that helps generate necessary tokens for YouTube
-          python3 -m pip install --break-system-packages bgutil-ytdlp-pot-provider
-
       - name: Download video
         env:
           URL: ${{ inputs.url }}
           FORMAT: ${{ inputs.format }}
           FILENAME_INPUT: ${{ inputs.custom_filename }}
         run: |
-          # Create the cookies file from the secret
-          echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
+          # Decode the cookies from the base64-encoded secret
+          echo "${{ secrets.YOUTUBE_COOKIES }}" | base64 -d > cookies.txt
           
           # Output filename template
           if [ -n "$FILENAME_INPUT" ]; then
@@ -41,7 +15,6 @@ jobs:
           fi
 
           echo "Downloading: $URL"
-          # Run yt-dlp with the cookies file and the JS runtime
           yt-dlp \
             --cookies cookies.txt \
             --format "$FORMAT" \
@@ -50,13 +23,6 @@ jobs:
             --no-playlist \
             "$URL"
 
-          # Get the actual filename of the downloaded video
+          # Get the actual filename
           DOWNLOADED_FILE=$(ls -t *mp4 *webm *mkv 2>/dev/null | head -1)
           echo "downloaded_file=$DOWNLOADED_FILE" >> $GITHUB_ENV
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: youtube-video
-          path: ${{ env.downloaded_file }}
-          retention-days: 3
