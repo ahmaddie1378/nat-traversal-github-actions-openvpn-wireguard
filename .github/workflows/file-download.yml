@@ -1,0 +1,40 @@
+name: Download Blocked File
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Direct URL of the file you want (must be publicly accessible)'
+        required: true
+      filename:
+        description: 'Filename to save as (optional – leave empty to use name from URL)'
+        required: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # allow pushing to repo
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download the file
+        run: |
+          URL="${{ inputs.url }}"
+          if [ -n "${{ inputs.filename }}" ]; then
+            FILENAME="${{ inputs.filename }}"
+          else
+            FILENAME=$(basename "$URL" | cut -d '?' -f1)
+          fi
+          echo "Downloading $URL => $FILENAME"
+          # Use wget, fallback to curl
+          wget --timeout=30 -q -O "$FILENAME" "$URL" || curl -L --max-time 30 -o "$FILENAME" "$URL"
+
+      - name: Commit file to repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Download: $FILENAME" || echo "Nothing to commit"
+          git push
