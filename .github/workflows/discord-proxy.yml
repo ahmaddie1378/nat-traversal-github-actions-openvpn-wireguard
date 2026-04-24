@@ -1,4 +1,4 @@
-name: Discord SOCKS5 Proxy (Fixed)
+name: Discord SOCKS5 Proxy (Key-Based)
 
 on:
   workflow_dispatch:
@@ -13,41 +13,50 @@ on:
       local_username:
         description: 'Your local username (e.g., ahmad)'
         required: true
+      local_public_key:
+        description: 'Your public SSH key (cat ~/.ssh/id_ed25519.pub)'
+        required: true
 
 jobs:
   reverse-proxy:
     runs-on: ubuntu-latest
     steps:
-      - name: Prepare runner SSH
+      - name: Prepare runner SSH and add user key
         run: |
           sudo apt update
           sudo apt install -y openssh-server openssh-client
-          # Configure SSH server to allow root password
+
+          # Allow root login and password authentication (not needed but safe)
           echo "PermitRootLogin yes" | sudo tee /etc/ssh/sshd_config.d/root.conf
           echo "PasswordAuthentication yes" | sudo tee -a /etc/ssh/sshd_config.d/root.conf
-          echo "KbdInteractiveAuthentication yes" | sudo tee -a /etc/ssh/sshd_config.d/root.conf
           sudo systemctl restart ssh
-          echo 'root:tunnel' | sudo chpasswd
-          # Show that SSH is running
-          sudo systemctl status ssh --no-pager
 
-      - name: Set up SSH key and start reverse tunnel
+          # Set root password just in case (optional)
+          echo 'root:tunnel' | sudo chpasswd
+
+          # Add YOUR public key to root's authorized_keys
+          sudo mkdir -p /root/.ssh
+          echo "${{ github.event.inputs.local_public_key }}" | sudo tee -a /root/.ssh/authorized_keys
+          sudo chmod 600 /root/.ssh/authorized_keys
+          sudo chown -R root:root /root/.ssh
+
+      - name: Set up SSH key for reverse tunnel
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          # Start reverse tunnel in verbose mode to catch errors
-          ssh -vvv -o StrictHostKeyChecking=no \
+
+          # Start reverse tunnel
+          ssh -o StrictHostKeyChecking=no \
               -o ServerAliveInterval=60 -o ExitOnForwardFailure=yes \
               -N -R 2222:localhost:22 \
-              -p ${{ inputs.ssh_port }} \
-              ${{ inputs.local_username }}@${{ inputs.public_ip }} &
+              -p ${{ github.event.inputs.ssh_port }} \
+              ${{ github.event.inputs.local_username }}@${{ github.event.inputs.public_ip }} &
+
           sleep 5
-          # Check if tunnel process is still running
           if pgrep -f "ssh.*-R.*2222" > /dev/null; then
-            echo "Reverse tunnel is established."
+            echo "Reverse tunnel established."
           else
-            echo "ERROR: Reverse tunnel failed. Check the verbose output above."
+            echo "ERROR: Tunnel failed."
           fi
-          # Keep alive
           sleep 21000
