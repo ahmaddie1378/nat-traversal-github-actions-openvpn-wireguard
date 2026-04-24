@@ -1,10 +1,10 @@
-name: Download YouTube Video (pytubefix Strategy)
+name: Download via Cobalt (Stable)
 
 on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: 'YouTube Video URL'
+        description: 'YouTube video URL'
         required: true
         type: string
 
@@ -12,25 +12,44 @@ jobs:
   download:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository (with LFS)
+        uses: actions/checkout@v4
         with:
-          python-version: '3.12'
-      - name: Install pytubefix
-        run: pip install pytubefix
-      - name: Download video
+          token: ${{ secrets.GH_PAT }}
+          lfs: true
+
+      - name: Install curl & jq
+        run: sudo apt-get update -qq && sudo apt-get install -y curl jq
+
+      - name: Request download from Cobalt
+        id: cobalt
         run: |
-          python -c "
-          from pytubefix import YouTube
-          url = '${{ github.event.inputs.video_url }}'
-          yt = YouTube(url)
-          print(f'Downloading: {yt.title}')
-          stream = yt.streams.get_highest_resolution()
-          stream.download(output_path='videos')
-          "
-      - name: Commit and push
+          # Cobalt API: POST a YouTube URL, receive a direct download link
+          RESPONSE=$(curl -sS --max-time 60 -X POST "https://co.wuk.sh/" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -d "{\"url\": \"${{ github.event.inputs.video_url }}\", \"videoQuality\": \"720p\", \"downloadMode\": \"auto\"}")
+
+          STATUS=$(echo "$RESPONSE" | jq -r '.status // "error"')
+          if [ "$STATUS" != "redirect" ] && [ "$STATUS" != "tunnel" ]; then
+            echo "Cobalt returned status: $STATUS"
+            echo "Full response: $RESPONSE"
+            exit 1
+          fi
+
+          DOWNLOAD_URL=$(echo "$RESPONSE" | jq -r '.url')
+          if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" = "null" ]; then
+            echo "No download URL in response."
+            exit 1
+          fi
+
+          echo "Download URL: $DOWNLOAD_URL"
+          mkdir -p videos
+          curl -L -o videos/video.mp4 "$DOWNLOAD_URL"
+
+      - name: Configure Git and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add videos/
-          git diff --cached --quiet || (git commit -m "Add video via pytubefix" && git push origin HEAD)
+          git diff --cached --quiet || (git commit -m "Add video via Cobalt" && git push origin HEAD)
