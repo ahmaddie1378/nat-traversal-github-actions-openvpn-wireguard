@@ -1,86 +1,62 @@
-name: Download YouTube Video (Cookie Header)
+name: V2Ray Proxy via SSH Reverse Tunnel
 
 on:
   workflow_dispatch:
     inputs:
-      video_url:
-        description: 'YouTube video URL'
+      user_public_ip:
+        description: 'Your public IP address'
         required: true
-        type: string
-      output_name:
-        description: 'Output filename (without extension)'
+      user_ssh_port:
+        description: 'SSH port on your machine (e.g., 22 or 2222)'
+        required: true
+        default: '22'
+      proxy_port:
+        description: 'Local port where the proxy will be available (default 10808)'
         required: false
-        default: 'video'
-        type: string
+        default: '10808'
 
 jobs:
-  download-and-commit:
+  tunnel:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository (with LFS)
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GH_PAT }}
-          lfs: true
-
-      - name: Install dependencies
+      - name: Install Xray
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y nodejs python3 python3-pip
-          pip3 install yt-dlp
+          # Install Xray from the official script
+          bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
 
-      - name: Generate cookies.txt from cookie header
-        env:
-          COOKIE_RAW: ${{ secrets.YT_COOKIE_HEADER }}
+      - name: Create Xray config (SOCKS inbound)
         run: |
-          # Remove any leading "cookie:" or "Cookie:" prefix and trim whitespace
-          CLEAN=$(echo "$COOKIE_RAW" | sed -E 's/^cookie:\s*//i')
-          echo "# Netscape HTTP Cookie File" > cookies.txt
-          echo "# This is a generated file!  Do not edit." >> cookies.txt
-          echo "" >> cookies.txt
-          echo "$CLEAN" | tr -d '\n' | awk '{
-            split($0, pairs, "; ");
-            for (i in pairs) {
-              if (pairs[i] ~ /=/) {
-                split(pairs[i], kv, "=");
-                name = kv[1];
-                value = substr(pairs[i], length(name)+2);
-                printf ".youtube.com\tTRUE\t/\tTRUE\t0\t%s\t%s\n", name, value
+          sudo mkdir -p /usr/local/etc/xray
+          cat | sudo tee /usr/local/etc/xray/config.json << EOF
+          {
+            "inbounds": [{
+              "port": ${{ inputs.proxy_port }},
+              "protocol": "socks",
+              "settings": {
+                "auth": "noauth",
+                "udp": true
               }
-            }
-          }' >> cookies.txt
-          echo "Generated cookies.txt with $(wc -l < cookies.txt) lines"
-          head -5 cookies.txt
+            }],
+            "outbounds": [{
+              "protocol": "freedom"
+            }]
+          }
+          EOF
+          sudo systemctl restart xray
 
-      - name: Download video (Android client + cookies)
-        run: |
-          mkdir -p videos
-          cd videos
-          yt-dlp \
-            --cookies ../cookies.txt \
-            --js-runtimes node \
-            --extractor-args "youtube:player_client=android" \
-            --output "${{ github.event.inputs.output_name }}.%(ext)s" \
-            --format "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
-            --merge-output-format mp4 \
-            "${{ github.event.inputs.video_url }}"
-
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Track video files with LFS
-        run: |
-          git lfs track "*.mp4" "*.webm" "*.mkv"
-          git add .gitattributes
-
-      - name: Commit and push
+      - name: Setup SSH reverse tunnel
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
-          git add videos/
-          git diff --cached --quiet || (
-            git commit -m "Add video: ${{ github.event.inputs.video_url }}"
-            git push origin HEAD
-          )
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Reverse-forward the Xray SOCKS port to your machine
+          # This will make the proxy available on your localhost:proxy_port
+          ssh -o StrictHostKeyChecking=no \
+              -N -R ${{ inputs.proxy_port }}:localhost:${{ inputs.proxy_port }} \
+              -p ${{ inputs.user_ssh_port }} \
+              your_username_here@${{ inputs.user_public_ip }} &
+          sleep 5
+          # Keep runner alive for 5 hours 50 minutes
+          sleep 21000
