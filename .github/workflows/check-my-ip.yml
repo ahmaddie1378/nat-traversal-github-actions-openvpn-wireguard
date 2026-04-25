@@ -1,0 +1,33 @@
+name: Check Connectivity to My Machine
+
+on:
+  workflow_dispatch:
+    inputs:
+      my_public_ip:
+        description: 'Your public IP address'
+        required: true
+      my_port:
+        description: 'Port to test (e.g., 22 for SSH, 25555 for OpenVPN)'
+        required: true
+        default: '22'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show runner’s own public IP
+        run: |
+          echo "Runner IP:"
+          curl -s https://ifconfig.me
+          echo ""
+
+      - name: Ping your IP (5 attempts)
+        run: |
+          ping -c 5 ${{ inputs.my_public_ip }} || echo "Ping failed (may be blocked)"
+
+      - name: Test TCP port connectivity
+        run: |
+          echo "Testing TCP connection to ${{ inputs.my_public_ip }}:${{ inputs.my_port }}"
+          timeout 5 bash -c "echo >/dev/tcp/${{ inputs.my_public_ip }}/${{ inputs.my_port }}" \
+            && echo "✅ Port is open and reachable!" \
+            || echo "❌ Port is closed or unreachable"
