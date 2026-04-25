@@ -7,16 +7,28 @@ jobs:
   echo-ip:
     runs-on: ubuntu-latest
     steps:
-      - name: Show runner’s own IP (multiple methods)
+      - name: Get runner’s public IP and start HTTP server
         run: |
-          echo "Runner IP (DNS):"
-          dig +short myip.opendns.com @resolver1.opendns.com || echo "DNS failed"
-          echo "Runner IP (Cloudflare):"
-          curl -s https://cloudflare.com/cdn-cgi/trace | grep ip || echo "CF failed"
+          # Try multiple methods to get runner's public IP
+          RUNNER_IP=""
+          # Method 1: OpenDNS via dig
+          RUNNER_IP=$(dig +short myip.opendns.com @resolver1.opendns.com 2>/dev/null)
+          # Method 2: Cloudflare trace
+          [ -z "$RUNNER_IP" ] && RUNNER_IP=$(curl -s https://cloudflare.com/cdn-cgi/trace 2>/dev/null | grep ip | cut -d= -f2)
+          # Method 3: ifconfig.io
+          [ -z "$RUNNER_IP" ] && RUNNER_IP=$(curl -s https://ifconfig.io 2>/dev/null)
+          # Method 4: ip.sb
+          [ -z "$RUNNER_IP" ] && RUNNER_IP=$(curl -s https://api.ip.sb/ip 2>/dev/null)
 
-      - name: Start HTTP server that returns client IP
-        run: |
-          cat > server.py << 'EOF'
+          if [ -z "$RUNNER_IP" ]; then
+            echo "Could not determine runner IP. Try again later."
+            exit 1
+          fi
+
+          echo "Runner IP: $RUNNER_IP"
+
+          # Create the HTTP server that echoes back the client IP
+          cat > server.py << EOF
           from http.server import HTTPServer, BaseHTTPRequestHandler
           import socket
 
@@ -29,11 +41,21 @@ jobs:
                   self.wfile.write(client_ip.encode())
 
           server = HTTPServer(('0.0.0.0', 9999), Handler)
-          print(f"Listening on port 9999... Access me at http://<runner_ip>:9999/")
+          print(f"Listening on port 9999...")
           server.serve_forever()
           EOF
+
           python3 server.py &
-          sleep 5
-          echo "Server is ready. Connect using curl from your local machine."
+          sleep 2
+
+          # Now print the exact command for the user
+          echo "================================================"
+          echo "   Server is ready!"
+          echo "   From your local machine, run:"
+          echo "   curl http://$RUNNER_IP:9999/"
+          echo "   (or open this URL in a browser)"
+          echo "   The response will be YOUR public IP."
+          echo "================================================"
+
           # Keep alive for 10 minutes
           sleep 600
