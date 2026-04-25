@@ -1,33 +1,29 @@
-name: Check Connectivity to My Machine
+name: IP Reflector
 
 on:
   workflow_dispatch:
-    inputs:
-      my_public_ip:
-        description: 'Your public IP address'
-        required: true
-      my_port:
-        description: 'Port to test (e.g., 22 for SSH, 25555 for OpenVPN)'
-        required: true
-        default: '22'
 
 jobs:
-  check:
+  reflect:
     runs-on: ubuntu-latest
     steps:
-      - name: Show runner’s own public IP
+      - name: Show runner’s own IPs (DNS & Cloudflare)
         run: |
-          echo "Runner IP:"
-          curl -s https://ifconfig.me
-          echo ""
+          echo "Runner IPv4:"
+          dig +short myip.opendns.com @resolver1.opendns.com || echo "DNS failed"
+          echo "Cloudflare trace:"
+          curl -s https://cloudflare.com/cdn-cgi/trace | grep ip || echo "CF failed"
 
-      - name: Ping your IP (5 attempts)
+      - name: Start TCP listener and log connecting IP
         run: |
-          ping -c 5 ${{ inputs.my_public_ip }} || echo "Ping failed (may be blocked)"
-
-      - name: Test TCP port connectivity
-        run: |
-          echo "Testing TCP connection to ${{ inputs.my_public_ip }}:${{ inputs.my_port }}"
-          timeout 5 bash -c "echo >/dev/tcp/${{ inputs.my_public_ip }}/${{ inputs.my_port }}" \
-            && echo "✅ Port is open and reachable!" \
-            || echo "❌ Port is closed or unreachable"
+          # Listen on port 9999, accept one connection, print the remote IP
+          echo "Listening on port 9999 – connect to the runner IP above with:"
+          echo "nc <runner_ip> 9999"
+          # Using bash TCP
+          bash -c '
+            exec 3<>/dev/tcp/0.0.0.0/9999
+            read -r line <&3
+            echo "Connection from: $line"
+          ' || echo "No connection received within timeout"
+          # Keep alive for 5 minutes to give you time to connect
+          sleep 300
