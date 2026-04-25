@@ -1,0 +1,62 @@
+name: V2Ray Proxy via SSH Reverse Tunnel
+
+on:
+  workflow_dispatch:
+    inputs:
+      user_public_ip:
+        description: 'Your public IP address'
+        required: true
+      user_ssh_port:
+        description: 'SSH port on your machine (e.g., 22 or 2222)'
+        required: true
+        default: '22'
+      proxy_port:
+        description: 'Local port where the proxy will be available (default 10808)'
+        required: false
+        default: '10808'
+
+jobs:
+  tunnel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Xray
+        run: |
+          # Install Xray from the official script
+          bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+
+      - name: Create Xray config (SOCKS inbound)
+        run: |
+          sudo mkdir -p /usr/local/etc/xray
+          cat | sudo tee /usr/local/etc/xray/config.json << EOF
+          {
+            "inbounds": [{
+              "port": ${{ inputs.proxy_port }},
+              "protocol": "socks",
+              "settings": {
+                "auth": "noauth",
+                "udp": true
+              }
+            }],
+            "outbounds": [{
+              "protocol": "freedom"
+            }]
+          }
+          EOF
+          sudo systemctl restart xray
+
+      - name: Setup SSH reverse tunnel
+        env:
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Reverse-forward the Xray SOCKS port to your machine
+          # This will make the proxy available on your localhost:proxy_port
+          ssh -o StrictHostKeyChecking=no \
+              -N -R ${{ inputs.proxy_port }}:localhost:${{ inputs.proxy_port }} \
+              -p ${{ inputs.user_ssh_port }} \
+              ahmad@${{ inputs.user_public_ip }} &
+          sleep 5
+          # Keep runner alive for 5 hours 50 minutes
+          sleep 21000
