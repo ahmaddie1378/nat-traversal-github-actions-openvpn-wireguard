@@ -1,0 +1,28 @@
+name: Show Runner Public IP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  show-ip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get public IP via DNS (OpenDNS)
+        run: |
+          echo "--- Method 1: DNS (OpenDNS) ---"
+          dig +short myip.opendns.com @resolver1.opendns.com || echo "DNS method failed"
+
+      - name: Get public IP via Cloudflare Trace
+        run: |
+          echo "--- Method 2: Cloudflare Trace ---"
+          curl -s https://cloudflare.com/cdn-cgi/trace | grep ip || echo "Cloudflare method failed"
+
+      - name: Get public IP via ifconfig.io (plain text)
+        run: |
+          echo "--- Method 3: ifconfig.io ---"
+          curl -s https://ifconfig.io 2>/dev/null || echo "ifconfig.io failed"
+
+      - name: Get public IP via ip.sb (plain text)
+        run: |
+          echo "--- Method 4: ip.sb ---"
+          curl -s https://api.ip.sb/ip 2>/dev/null || echo "ip.sb failed"
