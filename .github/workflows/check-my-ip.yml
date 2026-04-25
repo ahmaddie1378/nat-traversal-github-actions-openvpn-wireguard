@@ -1,36 +1,39 @@
-name: IP Reflector
+name: IP Echo Server
 
 on:
   workflow_dispatch:
 
 jobs:
-  reflect:
+  echo-ip:
     runs-on: ubuntu-latest
     steps:
-      - name: Show runner’s own public IP (fallback methods)
+      - name: Show runner’s own IP (multiple methods)
         run: |
-          echo "Attempting to get runner's IP via DNS..."
-          dig +short myip.opendns.com @resolver1.opendns.com || echo "DNS method failed"
-          echo "Attempting Cloudflare trace..."
-          curl -s https://cloudflare.com/cdn-cgi/trace | grep ip || echo "Cloudflare trace failed"
-          echo "Attempting ifconfig.io..."
-          curl -s https://ifconfig.io 2>/dev/null || echo "ifconfig.io failed"
-          echo "Attempting ip.sb..."
-          curl -s https://api.ip.sb/ip 2>/dev/null || echo "ip.sb failed"
+          echo "Runner IP (DNS):"
+          dig +short myip.opendns.com @resolver1.opendns.com || echo "DNS failed"
+          echo "Runner IP (Cloudflare):"
+          curl -s https://cloudflare.com/cdn-cgi/trace | grep ip || echo "CF failed"
 
-      - name: Listen for a connection and log the remote IP
+      - name: Start HTTP server that returns client IP
         run: |
-          PORT=9999
-          echo "Listening on port $PORT..."
-          echo "Connect to the runner IP (shown above) using: nc <runner_ip> $PORT"
-          # Use nc to listen for a single connection, then print the remote IP
-          # -l: listen, -p: port, -v: verbose (shows connection info)
-          timeout 300 nc -l -p $PORT -v 2>&1 | tee /tmp/connection.log &
-          # Allow time for the user to connect
+          cat > server.py << 'EOF'
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import socket
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  client_ip = self.client_address[0]
+                  self.send_response(200)
+                  self.send_header('Content-type', 'text/plain')
+                  self.end_headers()
+                  self.wfile.write(client_ip.encode())
+
+          server = HTTPServer(('0.0.0.0', 9999), Handler)
+          print(f"Listening on port 9999... Access me at http://<runner_ip>:9999/")
+          server.serve_forever()
+          EOF
+          python3 server.py &
           sleep 5
-          # The nc output will show "Connection from x.x.x.x port ..." in stderr
-          # We capture it and display
-          echo "---"
-          echo "Remote IP from connection log:"
-          cat /tmp/connection.log | grep "Connection from" || echo "No connection yet – waiting up to 5 minutes..."
-          sleep 295
+          echo "Server is ready. Connect using curl from your local machine."
+          # Keep alive for 10 minutes
+          sleep 600
