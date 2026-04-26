@@ -1,4 +1,4 @@
-name: Download YouTube Video (Plugin Method)
+name: Download YouTube Video (Android + PO Token)
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ on:
         default: '480'
 
 permissions:
-  contents: write      # needed to push the video back
+  contents: write
 
 jobs:
   download:
@@ -22,20 +22,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          lfs: true           # enable if you use Git LFS
+          lfs: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-          # Node.js is already present on ubuntu-latest, just confirm
-          node -v
+          # Ensure Node.js is available (it usually is)
+          node -v || (curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs)
 
       - name: Set up bgutil-ytdlp-pot-provider server
         run: |
-          # Clone a specific stable release
-          git clone --single-branch --branch 1.3.1 \
+          # Clone a recent stable release (1.3.5 – change if a newer exists)
+          git clone --single-branch --branch 1.3.5 \
             https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git
           cd bgutil-ytdlp-pot-provider/server/
           npm ci
@@ -45,27 +45,41 @@ jobs:
           nohup node dist/server.js > server.log 2>&1 &
           echo $! > ../../server.pid
 
-          # Wait until it's ready to accept connections (port 4416)
-          for i in $(seq 1 15); do
-            if curl -s http://localhost:4416/ > /dev/null; then
-              echo "Server is up!"
+          # Wait until the server is accepting connections (port 4416)
+          for i in $(seq 1 20); do
+            if curl -s http://localhost:4416/ > /dev/null 2>&1; then
+              echo "PO token server is up!"
               break
             fi
-            echo "Waiting for server (attempt $i)..."
+            echo "Waiting for server... (attempt $i)"
             sleep 1
           done
+          # If still not up after 20s, print logs and fail
+          if ! curl -s http://localhost:4416/ > /dev/null 2>&1; then
+            echo "Server failed to start. Logs:"
+            cat server.log
+            exit 1
+          fi
 
-      - name: Install yt-dlp and the plugin
-        run: |
-          python3 -m pip install -U yt-dlp
-          python3 -m pip install -U bgutil-ytdlp-pot-provider
+      - name: Install yt-dlp
+        run: python3 -m pip install -U yt-dlp
 
-      - name: Download video
+      - name: Generate tokens and download video
         run: |
-          # The plugin automatically contacts the local server for tokens.
-          # You can explicitly request the 'web' client to ensure PO token usage.
+          # Request a PO token from the local server
+          TOKEN_JSON=$(curl -s http://localhost:4416/token)
+          echo "Server response: $TOKEN_JSON"
+
+          # Extract visitorData and poToken
+          VISITOR_DATA=$(echo "$TOKEN_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('visitorData',''))")
+          PO_TOKEN=$(echo "$TOKEN_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('poToken',''))")
+
+          echo "visitor_data: $VISITOR_DATA"
+          echo "po_token: $PO_TOKEN"
+
+          # Download using the Android client, injecting the token
           yt-dlp \
-            --extractor-args "youtube:player_client=web,default" \
+            --extractor-args "youtube:player_client=android;po_token=web+${PO_TOKEN};visitor_data=${VISITOR_DATA}" \
             -f "bestvideo[height<=${{ github.event.inputs.quality }}]+bestaudio/best[height<=${{ github.event.inputs.quality }}]" \
             --merge-output-format mp4 \
             -o "%(title)s.%(ext)s" \
