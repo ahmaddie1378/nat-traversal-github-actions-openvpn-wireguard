@@ -7,7 +7,8 @@ on:
         description: 'YouTube video URL'
         required: true
       quality:
-        description: 'Max height (e.g. 480)'
+        description: 'Max height (480, 720, etc.)'
+        required: false
         default: '480'
 
 permissions:
@@ -17,37 +18,61 @@ jobs:
   download:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
         with:
           lfs: true
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
-      - name: Install Python tools
-        run: pip install -U yt-dlp po-token-generator
-
-      - name: Generate PO token
-        id: potoken
+      - name: Install dependencies
         run: |
-          echo "Generating PO token..."
-          TOKEN=$(po-token-generator)
-          echo "PO_TOKEN=$TOKEN" >> $GITHUB_ENV
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
 
-      - name: Download video
+      - name: Setup Node.js and tools
         run: |
+          # Install Node.js (required by the generator)
+          curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+          sudo apt-get install -y nodejs
+
+          # Install Python and the generator
+          python3 -m pip install -U yt-dlp
+          npm install -g youtube-po-token-generator
+
+          # *** Apply the critical bug fix ***
+          # Find the task.js file, patch it to accept 164 character tokens
+          GENERATOR_PATH=$(npm root -g)/youtube-po-token-generator
+          sudo sed -i 's/if (poToken && (poToken.length === 160 || poToken.length === 160))/if (poToken \&\& poToken.length >= 160)/g' $GENERATOR_PATH/lib/task.js
+          # *** End of fix ***
+
+      - name: Generate token and download video
+        run: |
+          # Step 1: Generate fresh tokens
+          echo "Generating PO Token..."
+          TOKENS=$(youtube-po-token-generator)
+          echo $TOKENS
+
+          # Step 2: Extract visitorData and poToken from the JSON output
+          VISITOR_DATA=$(echo $TOKENS | python3 -c "import sys, json; print(json.load(sys.stdin)['visitorData'])")
+          PO_TOKEN=$(echo $TOKENS | python3 -c "import sys, json; print(json.load(sys.stdin)['poToken'])")
+
+          # Step 3: Download the video with the fresh token
+          echo "Downloading video..."
           yt-dlp \
             -f "bestvideo[height<=${{ github.event.inputs.quality }}]+bestaudio/best[height<=${{ github.event.inputs.quality }}]" \
             --merge-output-format mp4 \
             -o "%(title)s.%(ext)s" \
-            --extractor-args "youtube:po_token=web+${PO_TOKEN}" \
+            --extractor-args "youtube:player_client=web,default;po_token=web+$PO_TOKEN;visitor_data=$VISITOR_DATA" \
             "${{ github.event.inputs.url }}"
 
-      - name: Commit and push
+      - name: Commit and push video
         run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add *.mp4 2>/dev/null || true
-          git diff --cached --quiet && exit 0
-          git commit -m "Downloaded video"
-          git push
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add *.mp4 *.mkv *.webm 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Downloaded video: ${{ github.event.inputs.url }}"
+            git push
+          fi
