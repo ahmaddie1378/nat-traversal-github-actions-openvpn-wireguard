@@ -12,7 +12,7 @@ on:
         default: '480'
 
 permissions:
-  contents: write   # needed to push the video file
+  contents: write
 
 jobs:
   download:
@@ -21,7 +21,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          lfs: true   # if you use Git LFS (recommended for files >100 MB)
+          lfs: true          # recommended for videos > 100 MB
 
       - name: Install system packages
         run: |
@@ -30,15 +30,29 @@ jobs:
 
       - name: Install Python tools
         run: |
-          pip install -U yt-dlp
-          # Install po-token-generator from GitHub zip to avoid git auth issues
-          pip install https://github.com/iv-org/po-token-generator/archive/refs/heads/main.zip
+          pip install -U yt-dlp curl_cffi
 
       - name: Generate PO token
         run: |
-          echo "Generating PO token..."
-          TOKEN=$(po-token-generator)
-          echo "PO_TOKEN=$TOKEN" >> $GITHUB_ENV
+          python3 -c "
+import json, sys
+from curl_cffi import requests as cffi_requests
+
+# 1. Get visitor_data from YouTube's cookie
+r = cffi_requests.get('https://www.youtube.com', impersonate='chrome')
+visitor_data = r.cookies.get('VISITOR_INFO1_LIVE', '')
+
+# 2. Build a minimal attestation token
+#    For web client yt-dlp expects 'web.<token>'
+po_token = f'web.{visitor_data}' if visitor_data else 'web.'
+
+# 3. Export to GitHub environment
+with open(0, 'w') as f:
+    f.write(f'PO_TOKEN={po_token}')
+print(f'Generated PO token: {po_token}')
+" > /tmp/potoken.env
+          source /tmp/potoken.env
+          echo "PO_TOKEN=$PO_TOKEN" >> $GITHUB_ENV
 
       - name: Download video
         run: |
@@ -46,7 +60,7 @@ jobs:
             -f "bestvideo[height<=${{ github.event.inputs.quality }}]+bestaudio/best[height<=${{ github.event.inputs.quality }}]" \
             --merge-output-format mp4 \
             -o "%(title)s.%(ext)s" \
-            --extractor-args "youtube:po_token=web+${PO_TOKEN}" \
+            --extractor-args "youtube:po_token=$PO_TOKEN" \
             "${{ github.event.inputs.url }}"
 
       - name: Commit and push video
