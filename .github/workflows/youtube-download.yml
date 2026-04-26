@@ -8,7 +8,6 @@ on:
         required: true
       quality:
         description: 'Max height (e.g. 480)'
-        required: false
         default: '480'
 
 permissions:
@@ -18,41 +17,22 @@ jobs:
   download:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          lfs: true          # recommended for videos > 100 MB
+          lfs: true
 
-      - name: Install system packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Install Python tools
-        run: |
-          pip install -U yt-dlp curl_cffi
+        run: pip install -U yt-dlp po-token-generator
 
       - name: Generate PO token
+        id: potoken
         run: |
-          python3 -c "
-import json, sys
-from curl_cffi import requests as cffi_requests
-
-# 1. Get visitor_data from YouTube's cookie
-r = cffi_requests.get('https://www.youtube.com', impersonate='chrome')
-visitor_data = r.cookies.get('VISITOR_INFO1_LIVE', '')
-
-# 2. Build a minimal attestation token
-#    For web client yt-dlp expects 'web.<token>'
-po_token = f'web.{visitor_data}' if visitor_data else 'web.'
-
-# 3. Export to GitHub environment
-with open(0, 'w') as f:
-    f.write(f'PO_TOKEN={po_token}')
-print(f'Generated PO token: {po_token}')
-" > /tmp/potoken.env
-          source /tmp/potoken.env
-          echo "PO_TOKEN=$PO_TOKEN" >> $GITHUB_ENV
+          echo "Generating PO token..."
+          TOKEN=$(po-token-generator)
+          echo "PO_TOKEN=$TOKEN" >> $GITHUB_ENV
 
       - name: Download video
         run: |
@@ -60,17 +40,14 @@ print(f'Generated PO token: {po_token}')
             -f "bestvideo[height<=${{ github.event.inputs.quality }}]+bestaudio/best[height<=${{ github.event.inputs.quality }}]" \
             --merge-output-format mp4 \
             -o "%(title)s.%(ext)s" \
-            --extractor-args "youtube:po_token=$PO_TOKEN" \
+            --extractor-args "youtube:po_token=web+${PO_TOKEN}" \
             "${{ github.event.inputs.url }}"
 
-      - name: Commit and push video
+      - name: Commit and push
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add *.mp4 *.mkv *.webm 2>/dev/null || true
-          if git diff --cached --quiet; then
-            echo "No new video to commit"
-          else
-            git commit -m "Downloaded: ${{ github.event.inputs.url }}"
-            git push
-          fi
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add *.mp4 2>/dev/null || true
+          git diff --cached --quiet && exit 0
+          git commit -m "Downloaded video"
+          git push
