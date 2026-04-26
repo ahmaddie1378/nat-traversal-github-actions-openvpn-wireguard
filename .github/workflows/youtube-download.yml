@@ -30,7 +30,8 @@ jobs:
 
       - name: Install Python tools
         run: |
-          pip install -U yt-dlp po-token-generator
+          pip install -U yt-dlp
+          pip install git+https://github.com/iv-org/po-token-generator.git
 
       - name: Generate PO token
         id: potoken
