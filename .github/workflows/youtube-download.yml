@@ -1,62 +1,61 @@
-name: V2Ray Proxy via SSH Reverse Tunnel
+name: Download YouTube Video
 
 on:
   workflow_dispatch:
     inputs:
-      user_public_ip:
-        description: 'Your public IP address'
+      url:
+        description: 'YouTube video URL'
         required: true
-      user_ssh_port:
-        description: 'SSH port on your machine (e.g., 22 or 2222)'
-        required: true
-        default: '22'
-      proxy_port:
-        description: 'Local port where the proxy will be available (default 10808)'
+      quality:
+        description: 'Max height (e.g. 480)'
         required: false
-        default: '10808'
+        default: '480'
+
+permissions:
+  contents: write   # to push the downloaded file
 
 jobs:
-  tunnel:
+  download:
     runs-on: ubuntu-latest
     steps:
-      - name: Install Xray
-        run: |
-          # Install Xray from the official script
-          bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true   # pulls LFS objects if any; harmless if not used
 
-      - name: Create Xray config (SOCKS inbound)
+      - name: Install system packages
         run: |
-          sudo mkdir -p /usr/local/etc/xray
-          cat | sudo tee /usr/local/etc/xray/config.json << EOF
-          {
-            "inbounds": [{
-              "port": ${{ inputs.proxy_port }},
-              "protocol": "socks",
-              "settings": {
-                "auth": "noauth",
-                "udp": true
-              }
-            }],
-            "outbounds": [{
-              "protocol": "freedom"
-            }]
-          }
-          EOF
-          sudo systemctl restart xray
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
 
-      - name: Setup SSH reverse tunnel
-        env:
-          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      - name: Install Python tools
         run: |
-          mkdir -p ~/.ssh
-          echo "$SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          # Reverse-forward the Xray SOCKS port to your machine
-          # This will make the proxy available on your localhost:proxy_port
-          ssh -o StrictHostKeyChecking=no \
-              -N -R ${{ inputs.proxy_port }}:localhost:${{ inputs.proxy_port }} \
-              -p ${{ inputs.user_ssh_port }} \
-              your_username_here@${{ inputs.user_public_ip }} &
-          sleep 5
-          # Keep runner alive for 5 hours 50 minutes
-          sleep 21000
+          pip install -U yt-dlp po-token-generator
+
+      - name: Generate PO token
+        id: potoken
+        run: |
+          echo "Generating PO token..."
+          TOKEN=$(po-token-generator)
+          echo "PO_TOKEN=$TOKEN" >> $GITHUB_ENV
+
+      - name: Download video
+        run: |
+          yt-dlp \
+            -f "bestvideo[height<=${{ github.event.inputs.quality }}]+bestaudio/best[height<=${{ github.event.inputs.quality }}]" \
+            --merge-output-format mp4 \
+            -o "%(title)s.%(ext)s" \
+            --extractor-args "youtube:po_token=web+${PO_TOKEN}" \
+            "${{ github.event.inputs.url }}"
+
+      - name: Commit and push video
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add *.mp4 *.mkv *.webm 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No new video to commit"
+          else
+            git commit -m "Downloaded: ${{ github.event.inputs.url }}"
+            git push
+          fi
