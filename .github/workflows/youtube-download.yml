@@ -33,17 +33,20 @@ jobs:
 
       - name: Set up bgutil-ytdlp-pot-provider server
         run: |
-          # Clone the 1.3.1 release (it contains a ready‑to‑run dist/server.js)
+          # Clone the 1.3.1 release
           git clone --depth 1 --branch 1.3.1 \
             https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git
           cd bgutil-ytdlp-pot-provider/server/
 
-          # Install dependencies only – NO compilation needed
+          # Install dependencies (dev dependencies include TypeScript)
           npm ci
 
-          # Make sure the pre‑built server file exists
+          # Build the TypeScript source → produces dist/server.js
+          npm run build
+
+          # Verify the build
           if [ ! -f dist/server.js ]; then
-            echo "ERROR: dist/server.js not found"
+            echo "ERROR: dist/server.js was not created"
             exit 1
           fi
 
@@ -51,7 +54,7 @@ jobs:
           nohup node dist/server.js > server.log 2>&1 &
           echo $! > ../../server.pid
 
-          # Wait for the server to be ready (port 4416)
+          # Wait for it to become ready (port 4416)
           for i in $(seq 1 20); do
             if curl -s http://localhost:4416/ > /dev/null 2>&1; then
               echo "PO token server is up!"
@@ -81,7 +84,7 @@ jobs:
           echo "visitor_data: $VISITOR_DATA"
           echo "po_token: $PO_TOKEN"
 
-          # Download using the Android client (bypasses bot checks) with the PO token
+          # Download using the Android client (bypasses bot checks) with PO token
           yt-dlp \
             --extractor-args "youtube:player_client=android;po_token=web+${PO_TOKEN};visitor_data=${VISITOR_DATA}" \
             -f "bestvideo[height<=${{ github.event.inputs.quality }}]+bestaudio/best[height<=${{ github.event.inputs.quality }}]" \
