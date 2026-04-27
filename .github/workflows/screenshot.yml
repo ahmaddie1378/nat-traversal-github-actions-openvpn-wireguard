@@ -37,7 +37,6 @@ jobs:
       - name: Start FlareSolverr via Docker
         run: |
           docker run -d --name flaresolverr -p 8191:8191 ghcr.io/flaresolverr/flaresolverr:latest
-          # Wait until the API is ready (up to 60 seconds)
           for i in $(seq 1 30); do
             if curl -s http://localhost:8191/v1 > /dev/null 2>&1; then
               echo "FlareSolverr is ready"
@@ -51,16 +50,48 @@ jobs:
         env:
           URL: ${{ inputs.url }}
         run: |
-          # Send request to FlareSolverr and extract cookies in Netscape format
           curl -s -X POST http://localhost:8191/v1 \
             -H 'Content-Type: application/json' \
             -d "{\"cmd\":\"request.get\",\"url\":\"$URL\",\"maxTimeout\":120000}" \
             -o response.json
 
-          # Convert to Netscape cookie file (needed for Puppeteer)
-          jq -r '.solution.cookies[] | "\(.domain)\t\(if .httpOnly then "TRUE" else "FALSE" end)\t\(.path)\t\(.secure)\t\(if .expiry then .expiry else 0 end)\t\(.name)\t\(.value)"' response.json > cookies.txt
-          # Also capture the final URL after any redirects
-          jq -r '.solution.response.url // ""' response.json > final_url.txt
+          python3 << 'EOF'
+          import json, sys
+          with open('response.json') as f:
+              data = json.load(f)
+
+          cookies = None
+          if 'solution' in data and 'cookies' in data['solution']:
+              cookies = data['solution']['cookies']
+          elif 'cookies' in data:
+              cookies = data['cookies']
+
+          if not cookies:
+              print("No cookies found in FlareSolverr response")
+              sys.exit(0)
+
+          with open('cookies.txt', 'w') as out:
+              for c in cookies:
+                  domain = c.get('domain', '')
+                  httpOnly = 'TRUE' if c.get('httpOnly') else 'FALSE'
+                  path = c.get('path', '/')
+                  secure = 'TRUE' if c.get('secure') else 'FALSE'
+                  expires = c.get('expiry', 0) or 0
+                  name = c.get('name', '')
+                  value = c.get('value', '')
+                  out.write(f"{domain}\t{httpOnly}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
+          print(f"Wrote {len(cookies)} cookies to cookies.txt")
+
+          final_url = ''
+          if 'solution' in data and 'response' in data['solution']:
+              final_url = data['solution']['response'].get('url', '')
+          elif 'solution' in data and 'url' in data['solution']:
+              final_url = data['solution']['url']
+
+          with open('final_url.txt', 'w') as f:
+              f.write(final_url)
+          EOF
+
           echo "final_url=$(cat final_url.txt)" >> $GITHUB_OUTPUT
 
       - name: Take screenshot using solved cookies
@@ -86,7 +117,6 @@ jobs:
             const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
             const waitSeconds = parseInt(process.env.WAIT_SECONDS) || 30;
 
-            // Parse cookies from Netscape file
             const cookiesRaw = fs.readFileSync('cookies.txt', 'utf-8').split('\n');
             const cookies = [];
             for (const line of cookiesRaw) {
@@ -114,7 +144,6 @@ jobs:
               await page.setUserAgent(userAgent);
               await page.setViewport({ width: 1366, height: 768 });
 
-              // Inject Cloudflare clearance cookies
               if (cookies.length > 0) {
                 await page.setCookie(...cookies);
                 console.log('Injected ' + cookies.length + ' cookies');
