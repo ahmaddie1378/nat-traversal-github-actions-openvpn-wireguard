@@ -33,19 +33,27 @@ jobs:
         run: |
           npm init -y
           npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth
-      - name: Download and prepare FlareSolverr
+      - name: Download and extract FlareSolverr
         run: |
           wget -q https://github.com/FlareSolverr/FlareSolverr/releases/download/v3.3.25/flaresolverr_linux_x64.tar.gz
-          mkdir -p flaresolverr_app
-          tar -xzf flaresolverr_linux_x64.tar.gz -C flaresolverr_app
-          chmod +x flaresolverr_app/flaresolverr
-          echo "FlareSolverr extracted successfully"
+          tar -xzf flaresolverr_linux_x64.tar.gz
+          # Find the actual binary (sometimes the tar contains a folder, sometimes just the binary)
+          REAL_BIN=$(find . -type f -executable -name 'flaresolverr' 2>/dev/null | head -1)
+          if [ -z "$REAL_BIN" ]; then
+            # If not found, maybe the binary is named differently?
+            ls -la
+            exit 1
+          fi
+          echo "Found binary at: $REAL_BIN"
+          # Move it to /usr/local/bin so we can call it directly
+          sudo mv "$REAL_BIN" /usr/local/bin/flaresolverr
+          sudo chmod +x /usr/local/bin/flaresolverr
 
       - name: Start FlareSolverr
         run: |
-          ./flaresolverr_app/flaresolverr --log-level info &
-          # Wait until the service responds
-          for i in {1..30}; do
+          flaresolverr --log-level info &
+          # Wait until the API responds (up to 60 seconds)
+          for i in $(seq 1 30); do
             if curl -s http://localhost:8191/v1 > /dev/null 2>&1; then
               echo "FlareSolverr is ready"
               break
