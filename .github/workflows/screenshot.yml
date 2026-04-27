@@ -1,4 +1,4 @@
-name: Web Screenshot (Stealth + Fallback)
+name: Web Screenshot (Stealth + Wait Control)
 
 on:
   workflow_dispatch:
@@ -11,6 +11,11 @@ on:
         description: 'Screenshot filename (without .png) – leave empty for timestamp'
         required: false
         type: string
+      wait_seconds:
+        description: 'Extra wait time after page load (seconds) – default 30'
+        required: false
+        type: string
+        default: '30'
 
 permissions:
   contents: write
@@ -46,10 +51,11 @@ jobs:
           curl -sL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" "$URL" > "screenshots/$HTMLFILE"
           echo "html_file=$HTMLFILE" >> $GITHUB_ENV
 
-      - name: Take screenshot with stealth mode
+      - name: Take screenshot with adjustable wait
         env:
           URL: ${{ inputs.url }}
           FILENAME: ${{ inputs.filename }}
+          WAIT_SECONDS: ${{ inputs.wait_seconds }}
         run: |
           mkdir -p screenshots
 
@@ -67,6 +73,9 @@ jobs:
             const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
             const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+            // Use input wait seconds, fallback to 30
+            const waitSeconds = parseInt(process.env.WAIT_SECONDS) || 30;
+
             (async () => {
               const browser = await puppeteer.launch({
                 headless: 'new',
@@ -81,16 +90,18 @@ jobs:
               await page.setViewport({ width: 1366, height: 768 });
 
               try {
+                // Longer navigation timeout: 2 minutes
                 await page.goto(process.env.URL, {
                   waitUntil: 'domcontentloaded',
-                  timeout: 60000
+                  timeout: 120000
                 });
-                // Give Cloudflare extra time
-                await wait(10000);
+                console.log('Page loaded. Waiting ' + waitSeconds + ' seconds for content...');
+                await wait(waitSeconds * 1000);
               } catch (err) {
                 console.log('Page load timed out or error:', err.message);
                 console.log('Capturing current page content anyway...');
-                await wait(5000);
+                // Wait half the requested time on error, at least 5 sec
+                await wait(Math.max(waitSeconds * 500, 5000));
               }
 
               await page.screenshot({
