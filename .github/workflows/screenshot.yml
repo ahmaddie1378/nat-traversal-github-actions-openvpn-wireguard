@@ -1,4 +1,4 @@
-name: Screenshot with Cloudflare Bypass
+name: Screenshot with Cloudflare Bypass (Docker)
 
 on:
   workflow_dispatch:
@@ -33,26 +33,11 @@ jobs:
         run: |
           npm init -y
           npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth
-      - name: Download and extract FlareSolverr
-        run: |
-          wget -q https://github.com/FlareSolverr/FlareSolverr/releases/download/v3.3.25/flaresolverr_linux_x64.tar.gz
-          tar -xzf flaresolverr_linux_x64.tar.gz
-          # Find the actual binary (sometimes the tar contains a folder, sometimes just the binary)
-          REAL_BIN=$(find . -type f -executable -name 'flaresolverr' 2>/dev/null | head -1)
-          if [ -z "$REAL_BIN" ]; then
-            # If not found, maybe the binary is named differently?
-            ls -la
-            exit 1
-          fi
-          echo "Found binary at: $REAL_BIN"
-          # Move it to /usr/local/bin so we can call it directly
-          sudo mv "$REAL_BIN" /usr/local/bin/flaresolverr
-          sudo chmod +x /usr/local/bin/flaresolverr
 
-      - name: Start FlareSolverr
+      - name: Start FlareSolverr via Docker
         run: |
-          flaresolverr --log-level info &
-          # Wait until the API responds (up to 60 seconds)
+          docker run -d --name flaresolverr -p 8191:8191 ghcr.io/flaresolverr/flaresolverr:latest
+          # Wait until the API is ready (up to 60 seconds)
           for i in $(seq 1 30); do
             if curl -s http://localhost:8191/v1 > /dev/null 2>&1; then
               echo "FlareSolverr is ready"
@@ -65,17 +50,16 @@ jobs:
         id: solve
         env:
           URL: ${{ inputs.url }}
-          OUTPUT: 'cookies.json'
         run: |
-          # Send request to FlareSolverr and extract cookies
+          # Send request to FlareSolverr and extract cookies in Netscape format
           curl -s -X POST http://localhost:8191/v1 \
             -H 'Content-Type: application/json' \
             -d "{\"cmd\":\"request.get\",\"url\":\"$URL\",\"maxTimeout\":120000}" \
             -o response.json
 
-          # Extract cookies from response (Netscape format)
+          # Convert to Netscape cookie file (needed for Puppeteer)
           jq -r '.solution.cookies[] | "\(.domain)\t\(if .httpOnly then "TRUE" else "FALSE" end)\t\(.path)\t\(.secure)\t\(if .expiry then .expiry else 0 end)\t\(.name)\t\(.value)"' response.json > cookies.txt
-          # Also save the final redirected URL (if any)
+          # Also capture the final URL after any redirects
           jq -r '.solution.response.url // ""' response.json > final_url.txt
           echo "final_url=$(cat final_url.txt)" >> $GITHUB_OUTPUT
 
@@ -92,7 +76,6 @@ jobs:
             FNAME="screenshot_$(date +%Y%m%d_%H%M%S).png"
           fi
 
-          # Read cookies and inject into Puppeteer
           node -e "
             const puppeteer = require('puppeteer-extra');
             const StealthPlugin = require('puppeteer-extra-plugin-stealth');
@@ -103,7 +86,7 @@ jobs:
             const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
             const waitSeconds = parseInt(process.env.WAIT_SECONDS) || 30;
 
-            // Parse cookies from Netscape file created by FlareSolverr
+            // Parse cookies from Netscape file
             const cookiesRaw = fs.readFileSync('cookies.txt', 'utf-8').split('\n');
             const cookies = [];
             for (const line of cookiesRaw) {
@@ -131,7 +114,7 @@ jobs:
               await page.setUserAgent(userAgent);
               await page.setViewport({ width: 1366, height: 768 });
 
-              // Inject the Cloudflare clearance cookies before navigation
+              // Inject Cloudflare clearance cookies
               if (cookies.length > 0) {
                 await page.setCookie(...cookies);
                 console.log('Injected ' + cookies.length + ' cookies');
