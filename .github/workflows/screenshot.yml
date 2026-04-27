@@ -1,4 +1,4 @@
-name: Web Screenshot (Stealth)
+name: Web Screenshot (Stealth + Fallback)
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: write   # allow pushing commits
 
 jobs:
   screenshot:
@@ -27,12 +27,26 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies
+      - name: Install Puppeteer and stealth plugin
         run: |
           npm init -y
           npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth
 
-      - name: Take screenshot with stealth
+      - name: Fetch raw HTML (fallback)
+        env:
+          URL: ${{ inputs.url }}
+          FILENAME: ${{ inputs.filename }}
+        run: |
+          mkdir -p screenshots
+          if [ -n "$FILENAME" ]; then
+            HTMLFILE="$FILENAME.html"
+          else
+            HTMLFILE="page_$(date +%Y%m%d_%H%M%S).html"
+          fi
+          curl -sL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" "$URL" > "screenshots/$HTMLFILE"
+          echo "html_file=$HTMLFILE" >> $GITHUB_ENV
+
+      - name: Take screenshot with stealth mode
         env:
           URL: ${{ inputs.url }}
           FILENAME: ${{ inputs.filename }}
@@ -50,7 +64,6 @@ jobs:
             const StealthPlugin = require('puppeteer-extra-plugin-stealth');
             puppeteer.use(StealthPlugin());
 
-            // A common, valid user-agent (Windows Chrome)
             const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
             (async () => {
@@ -65,19 +78,33 @@ jobs:
               const page = await browser.newPage();
               await page.setUserAgent(userAgent);
               await page.setViewport({ width: 1366, height: 768 });
-              await page.goto(process.env.URL, { waitUntil: 'networkidle2', timeout: 30000 });
-              // Extra wait to let Cloudflare JS pass
-              await page.waitForTimeout(5000);
-              await page.screenshot({ path: 'screenshots/' + process.env.FNAME, fullPage: true });
+
+              try {
+                await page.goto(process.env.URL, {
+                  waitUntil: 'domcontentloaded',
+                  timeout: 60000
+                });
+                // Extra wait for Cloudflare challenges
+                await page.waitForTimeout(10000);
+              } catch (err) {
+                console.log('Page load timed out or error:', err.message);
+                console.log('Capturing current page content anyway...');
+                await page.waitForTimeout(5000);
+              }
+
+              await page.screenshot({
+                path: 'screenshots/' + process.env.FNAME,
+                fullPage: true
+              });
               await browser.close();
               console.log('Screenshot saved to screenshots/' + process.env.FNAME);
             })();
           "
 
-      - name: Commit and push screenshot
+      - name: Commit and push all files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add screenshots/
-          git commit -m "Screenshot of ${{ inputs.url }}" || echo "No changes to commit"
+          git commit -m "Snapshot of ${{ inputs.url }}" || echo "No changes to commit"
           git push
