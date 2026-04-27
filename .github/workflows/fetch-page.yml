@@ -1,0 +1,56 @@
+name: Fetch and zip a webpage
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL of the page to download'
+        required: true
+        default: 'https://example.com'
+      name:
+        description: 'Name for the zip file (without .zip)'
+        required: true
+        default: 'downloaded-page'
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Download website
+        run: |
+          wget \
+            --recursive \
+            --level=2 \
+            --convert-links \
+            --adjust-extension \
+            --page-requisites \
+            --no-parent \
+            --directory-prefix=site \
+            "${{ github.event.inputs.url }}"
+        # If you only need a single HTML file, use:
+        # wget -O site/index.html "${{ github.event.inputs.url }}"
+
+      - name: Create zip archive
+        run: |
+          cd site
+          zip -r ../${{ github.event.inputs.name }}.zip .
+          cd ..
+
+      - name: Commit and push zip file
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Remove old site/ folder if you don't want it in the repo
+          # (we only want the zip)
+          rm -rf site
+          
+          # Remove previous zip of the same name if you want to replace it
+          git rm --cached --ignore-unmatch ${{ github.event.inputs.name }}.zip
+          
+          git add ${{ github.event.inputs.name }}.zip
+          git commit -m "Downloaded ${{ github.event.inputs.url }}" || echo "No changes to commit"
+          git push
