@@ -1,0 +1,66 @@
+name: Take Screenshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL to capture'
+        required: true
+        type: string
+      fullpage:
+        description: 'Full page screenshot? (true/false)'
+        required: false
+        default: 'false'
+        type: string
+
+jobs:
+  screenshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Puppeteer
+        run: npm install puppeteer
+
+      - name: Take screenshot
+        id: capture
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const puppeteer = require('puppeteer');
+            const fs = require('fs');
+
+            const url = "${{ github.event.inputs.url }}";
+            const fullPage = "${{ github.event.inputs.fullpage }}" === 'true';
+
+            const browser = await puppeteer.launch({
+              headless: 'new',
+              args: ['--no-sandbox', '--disable-setuid-sandbox']
+            });
+            const page = await browser.newPage();
+            await page.setViewport({ width: 1280, height: 800 });
+            await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const filename = `screenshots/${timestamp}.png`;
+            await fs.promises.mkdir('screenshots', { recursive: true });
+            await page.screenshot({ path: filename, fullPage });
+            await browser.close();
+
+            // Save filename for commit message
+            core.setOutput('filename', filename);
+            console.log(`Screenshot saved as ${filename}`);
+
+      - name: Commit and push screenshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ${{ steps.capture.outputs.filename }}
+          git commit -m "Screenshot of ${{ github.event.inputs.url }}"
+          git push
