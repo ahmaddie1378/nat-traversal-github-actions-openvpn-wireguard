@@ -57,6 +57,7 @@ jobs:
 
           python3 << 'EOF'
           import json, sys
+
           with open('response.json') as f:
               data = json.load(f)
 
@@ -68,10 +69,17 @@ jobs:
 
           if not cookies:
               print("No cookies found in FlareSolverr response")
+              with open('cookies.txt', 'w') as f:
+                  f.write('')
+              with open('final_url.txt', 'w') as f:
+                  f.write('')
               sys.exit(0)
 
+          valid_cookies = 0
           with open('cookies.txt', 'w') as out:
               for c in cookies:
+                  if not isinstance(c, dict):
+                      continue
                   domain = c.get('domain', '')
                   httpOnly = 'TRUE' if c.get('httpOnly') else 'FALSE'
                   path = c.get('path', '/')
@@ -80,7 +88,8 @@ jobs:
                   name = c.get('name', '')
                   value = c.get('value', '')
                   out.write(f"{domain}\t{httpOnly}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
-          print(f"Wrote {len(cookies)} cookies to cookies.txt")
+                  valid_cookies += 1
+          print(f"Wrote {valid_cookies} valid cookies to cookies.txt")
 
           final_url = ''
           if 'solution' in data and 'response' in data['solution']:
