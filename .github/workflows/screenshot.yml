@@ -153,33 +153,65 @@ jobs:
 
             (async () => {
               const browser = await puppeteer.launch({
-                headless: 'new',
-                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
+                headless: true,               // 'true' is more compatible than 'new'
+                args: [
+                  '--no-sandbox',
+                  '--disable-setuid-sandbox',
+                  '--disable-blink-features=AutomationControlled',
+                  '--window-size=1366,768'    // force window size
+                ]
               });
               const page = await browser.newPage();
               await page.setUserAgent(userAgent);
               await page.setViewport({ width: 1366, height: 768 });
 
+              // Optionally clear any existing cookies and set ours
+              const client = await page.target().createCDPSession();
+              await client.send('Network.clearBrowserCookies');
               if (cookies.length > 0) {
                 await page.setCookie(...cookies);
                 console.log('Injected ' + cookies.length + ' cookies');
+              } else {
+                console.warn('No cookies to inject – the page may block');
               }
 
+              let pageLoaded = false;
               try {
+                // First try to load the page with a generous timeout
                 await page.goto(process.env.URL, {
                   waitUntil: 'domcontentloaded',
                   timeout: 120000
                 });
-                console.log('Page loaded. Waiting ' + waitSeconds + ' seconds...');
-                await wait(waitSeconds * 1000);
+                console.log('Page loaded (domcontentloaded).');
+                pageLoaded = true;
               } catch (err) {
-                console.log('Error or timeout:', err.message);
-                await wait(Math.max(waitSeconds * 500, 5000));
+                console.log('Navigation error:', err.message);
+                // If navigation fails, we'll still capture whatever is there after a wait
               }
 
-              await page.screenshot({ path: 'screenshots/' + process.env.FNAME, fullPage: true });
+              // Wait extra time for JS to render, Cloudflare challenge to fully complete
+              console.log('Waiting ' + waitSeconds + ' seconds for content...');
+              await wait(waitSeconds * 1000);
+
+              // Log page title to see if we landed on something meaningful
+              const title = await page.title().catch(() => 'unknown');
+              console.log('Page title:', title);
+
+              // If the body is empty, maybe the page didn't render – try refreshing once
+              const bodyHTML = await page.content().catch(() => 'error');
+              if (!pageLoaded || bodyHTML.length < 500 || title === '') {
+                console.log('Page seems blank, attempting a refresh...');
+                await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+                await wait(waitSeconds * 1000);
+              }
+
+              // Take full-page screenshot
+              await page.screenshot({
+                path: 'screenshots/' + process.env.FNAME,
+                fullPage: true
+              });
+              console.log('Screenshot saved to screenshots/' + process.env.FNAME);
               await browser.close();
-              console.log('Screenshot saved');
             })();
           "
 
