@@ -58,48 +58,31 @@ jobs:
 
           python3 << 'EOF'
           import json, sys
-
           with open('response.json') as f:
               data = json.load(f)
-
           cookies = None
           if 'solution' in data and 'cookies' in data['solution']:
               cookies = data['solution']['cookies']
           elif 'cookies' in data:
               cookies = data['cookies']
-
-          valid_cookies = 0
+          valid = 0
           with open('cookies.txt', 'w') as out:
               if cookies:
                   for c in cookies:
-                      if not isinstance(c, dict):
-                          continue
-                      domain = c.get('domain', '')
-                      httpOnly = 'TRUE' if c.get('httpOnly') else 'FALSE'
-                      path = c.get('path', '/')
-                      secure = 'TRUE' if c.get('secure') else 'FALSE'
-                      expires = c.get('expiry', 0) or 0
-                      name = c.get('name', '')
-                      value = c.get('value', '')
-                      out.write(f"{domain}\t{httpOnly}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
-                      valid_cookies += 1
-          print(f"Wrote {valid_cookies} valid cookies to cookies.txt")
-
+                      if not isinstance(c, dict): continue
+                      out.write(f"{c.get('domain','')}\t{'TRUE' if c.get('httpOnly') else 'FALSE'}\t{c.get('path','/')}\t{'TRUE' if c.get('secure') else 'FALSE'}\t{c.get('expiry',0) or 0}\t{c.get('name','')}\t{c.get('value','')}\n")
+                      valid += 1
+          print(f"Wrote {valid} cookies")
           final_url = ''
           if 'solution' in data and 'response' in data['solution']:
               resp = data['solution']['response']
-              if isinstance(resp, dict):
-                  final_url = resp.get('url', '')
-              elif isinstance(resp, str):
-                  final_url = ''
+              final_url = resp.get('url','') if isinstance(resp, dict) else ''
           elif 'solution' in data and 'url' in data['solution']:
               final_url = data['solution']['url']
-
-          with open('final_url.txt', 'w') as f:
-              f.write(final_url)
+          with open('final_url.txt','w') as f: f.write(final_url)
           EOF
 
-      - name: Save complete page as MHTML using headless browser
+      - name: Save complete page as MHTML
         env:
           URL: ${{ inputs.url }}
           FILENAME_INPUT: ${{ inputs.filename }}
@@ -107,13 +90,16 @@ jobs:
         run: |
           mkdir -p downloads
 
-          # Determine output name
+          # Determine output filename base
           if [ -n "$FILENAME_INPUT" ]; then
             BASE="$FILENAME_INPUT"
           else
             DOMAIN=$(echo "$URL" | awk -F/ '{print $3}')
             BASE="${DOMAIN}_$(date +%Y%m%d_%H%M%S)"
           fi
+
+          export BASE                    # <-- make it visible to Node
+          echo "Output base name: $BASE"
 
           node -e "
             const puppeteer = require('puppeteer-extra');
@@ -124,8 +110,13 @@ jobs:
 
             const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
             const waitSeconds = parseInt(process.env.WAIT_SECONDS) || 30;
+            const base = process.env.BASE;
 
-            // Parse cookies
+            if (!base) {
+              console.error('BASE environment variable is missing!');
+              process.exit(1);
+            }
+
             const cookiesRaw = fs.readFileSync('cookies.txt', 'utf-8').split('\n');
             const cookies = [];
             for (const line of cookiesRaw) {
@@ -170,18 +161,27 @@ jobs:
                 await wait(Math.max(waitSeconds * 500, 5000));
               }
 
-              // Save as MHTML (single file with all assets)
+              // Save as MHTML
               const cdp = await page.target().createCDPSession();
               const { data } = await cdp.send('Page.captureSnapshot', { format: 'mhtml' });
-              fs.writeFileSync('downloads/' + process.env.BASE + '.mhtml', data);
-              console.log('MHTML saved to downloads/' + process.env.BASE + '.mhtml');
+              fs.writeFileSync('downloads/' + base + '.mhtml', data);
+              console.log('MHTML saved: downloads/' + base + '.mhtml');
               await browser.close();
             })();
           "
 
+          # Verify the file
+          if [ -f "downloads/$BASE.mhtml" ]; then
+            echo "MHTML file exists."
+          else
+            echo "ERROR: MHTML file was not created!"
+            ls -la downloads/
+            exit 1
+          fi
+
           echo "base_name=$BASE" >> $GITHUB_ENV
 
-      - name: Package MHTML into zip file
+      - name: Package MHTML into zip
         run: |
           cd downloads
           zip -r "../${{ env.base_name }}.zip" "${{ env.base_name }}.mhtml"
