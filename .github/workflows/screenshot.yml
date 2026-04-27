@@ -61,44 +61,51 @@ jobs:
           with open('response.json') as f:
               data = json.load(f)
 
+          # Extract cookies (same as before)
           cookies = None
           if 'solution' in data and 'cookies' in data['solution']:
               cookies = data['solution']['cookies']
           elif 'cookies' in data:
               cookies = data['cookies']
 
-          if not cookies:
-              print("No cookies found in FlareSolverr response")
+          if cookies:
+              valid_cookies = 0
+              with open('cookies.txt', 'w') as out:
+                  for c in cookies:
+                      if not isinstance(c, dict):
+                          continue
+                      domain = c.get('domain', '')
+                      httpOnly = 'TRUE' if c.get('httpOnly') else 'FALSE'
+                      path = c.get('path', '/')
+                      secure = 'TRUE' if c.get('secure') else 'FALSE'
+                      expires = c.get('expiry', 0) or 0
+                      name = c.get('name', '')
+                      value = c.get('value', '')
+                      out.write(f"{domain}\t{httpOnly}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
+                      valid_cookies += 1
+              print(f"Wrote {valid_cookies} valid cookies to cookies.txt")
+          else:
+              print("No cookies found")
               with open('cookies.txt', 'w') as f:
                   f.write('')
-              with open('final_url.txt', 'w') as f:
-                  f.write('')
-              sys.exit(0)
 
-          valid_cookies = 0
-          with open('cookies.txt', 'w') as out:
-              for c in cookies:
-                  if not isinstance(c, dict):
-                      continue
-                  domain = c.get('domain', '')
-                  httpOnly = 'TRUE' if c.get('httpOnly') else 'FALSE'
-                  path = c.get('path', '/')
-                  secure = 'TRUE' if c.get('secure') else 'FALSE'
-                  expires = c.get('expiry', 0) or 0
-                  name = c.get('name', '')
-                  value = c.get('value', '')
-                  out.write(f"{domain}\t{httpOnly}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
-                  valid_cookies += 1
-          print(f"Wrote {valid_cookies} valid cookies to cookies.txt")
-
+          # Extract final URL (handle both object and string responses)
           final_url = ''
           if 'solution' in data and 'response' in data['solution']:
-              final_url = data['solution']['response'].get('url', '')
+              resp = data['solution']['response']
+              if isinstance(resp, dict):
+                  final_url = resp.get('url', '')
+              elif isinstance(resp, str):
+                  # Response is the page HTML, no separate URL; leave empty or use original URL
+                  final_url = ''
           elif 'solution' in data and 'url' in data['solution']:
               final_url = data['solution']['url']
+          else:
+              final_url = ''
 
           with open('final_url.txt', 'w') as f:
               f.write(final_url)
+          print(f"Final URL: {final_url if final_url else 'none'}")
           EOF
 
           echo "final_url=$(cat final_url.txt)" >> $GITHUB_OUTPUT
