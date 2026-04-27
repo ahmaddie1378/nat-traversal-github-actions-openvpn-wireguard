@@ -13,7 +13,7 @@ on:
         type: string
 
 permissions:
-  contents: write   # allow pushing commits
+  contents: write
 
 jobs:
   screenshot:
@@ -65,6 +65,7 @@ jobs:
             puppeteer.use(StealthPlugin());
 
             const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+            const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
             (async () => {
               const browser = await puppeteer.launch({
@@ -84,12 +85,12 @@ jobs:
                   waitUntil: 'domcontentloaded',
                   timeout: 60000
                 });
-                // Extra wait for Cloudflare challenges
-                await page.waitForTimeout(10000);
+                // Give Cloudflare extra time
+                await wait(10000);
               } catch (err) {
                 console.log('Page load timed out or error:', err.message);
                 console.log('Capturing current page content anyway...');
-                await page.waitForTimeout(5000);
+                await wait(5000);
               }
 
               await page.screenshot({
