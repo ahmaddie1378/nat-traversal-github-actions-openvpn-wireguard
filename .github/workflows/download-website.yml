@@ -1,16 +1,16 @@
-name: Save Full Offline Webpage (SingleFile)
+name: Save Full Offline Website (assets)
 
 on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'URL of the page to archive'
+        description: 'URL of the webpage to save'
         required: true
       filename:
-        description: 'Filename without .html (optional)'
+        description: 'Base name for the zip (optional)'
         required: false
       wait_seconds:
-        description: 'Extra wait after page load (default 30s)'
+        description: 'Extra wait after load (default 30s)'
         required: false
         default: '30'
 
@@ -18,7 +18,7 @@ permissions:
   contents: write
 
 jobs:
-  archive:
+  download-site:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -29,18 +29,18 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install SingleFile CLI and Puppeteer
+      - name: Install dependencies
         run: |
           npm init -y
-          # SingleFile CLI plus the stealth plugin for Puppeteer
-          npm install single-file-cli puppeteer puppeteer-extra puppeteer-extra-plugin-stealth
+          npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth
+          npm install website-scraper website-scraper-puppeteer
 
-      - name: Start FlareSolverr via Docker
+      - name: Start FlareSolverr (Docker)
         run: |
           docker run -d --name flaresolverr -p 8191:8191 ghcr.io/flaresolverr/flaresolverr:latest
           for i in $(seq 1 30); do
             if curl -s http://localhost:8191/v1 > /dev/null 2>&1; then
-              echo "FlareSolverr is ready"
+              echo "FlareSolverr ready"
               break
             fi
             sleep 2
@@ -60,7 +60,6 @@ jobs:
           with open('response.json') as f:
               data = json.load(f)
           cookies = data.get('solution', {}).get('cookies') or data.get('cookies')
-          valid = 0
           with open('cookies.txt', 'w') as out:
               if cookies:
                   for c in cookies:
@@ -73,15 +72,14 @@ jobs:
                       name = c.get('name','')
                       value = c.get('value','')
                       out.write(f"{domain}\t{httpOnly}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
-                      valid += 1
-          print(f"FlareSolverr cookies: {valid}")
+          print("Cookies exported")
           EOF
 
-      - name: Save offline page with SingleFile
+      - name: Scrape website (offline copy)
         env:
           URL: ${{ inputs.url }}
-          FILENAME_INPUT: ${{ inputs.filename }}
           WAIT_SECONDS: ${{ inputs.wait_seconds }}
+          FILENAME_INPUT: ${{ inputs.filename }}
         run: |
           mkdir -p downloads
           if [ -n "$FILENAME_INPUT" ]; then
@@ -90,57 +88,99 @@ jobs:
             DOMAIN=$(echo "$URL" | awk -F/ '{print $3}')
             BASE="${DOMAIN}_$(date +%Y%m%d_%H%M%S)"
           fi
-          echo "Output filename: $BASE.html"
+          export BASE
+          echo "Output folder: downloads/$BASE"
 
-          # Convert Netscape cookies to JSON array for SingleFile CLI
-          python3 << 'PYEOF'
-          import json
+          node -e "
+          const scrape = require('website-scraper');
+          const PuppeteerPlugin = require('website-scraper-puppeteer');
+          const fs = require('fs');
 
-          cookies_list = []
-          with open('cookies.txt') as f:
-              for line in f:
-                  if line.strip() == '' or line.startswith('#'): continue
-                  parts = line.strip().split('\t')
-                  if len(parts) >= 7:
-                      domain, _, path, secure, expires, name, value = parts[:7]
-                      cookies_list.append({
-                          "name": name,
-                          "value": value,
-                          "domain": domain,
-                          "path": path,
-                          "secure": secure == "TRUE",
-                          "httpOnly": False,
-                          "expiry": int(expires) if expires != '0' else None
-                      })
-          with open('cookies.json', 'w') as out:
-              json.dump(cookies_list, out)
-          print(f"Converted {len(cookies_list)} cookies to JSON")
-          PYEOF
+          // Parse cookies from Netscape file
+          function parseCookies(file) {
+            const lines = fs.readFileSync(file, 'utf-8').split('\n');
+            const cookies = [];
+            for (let line of lines) {
+              line = line.trim();
+              if (line === '' || line.startsWith('#')) continue;
+              const parts = line.split('\t');
+              if (parts.length >= 7) {
+                cookies.push({
+                  name: parts[5],
+                  value: parts[6],
+                  domain: parts[0].replace(/^\./, ''),
+                  path: parts[2],
+                  secure: parts[3] === 'TRUE',
+                  httpOnly: parts[1] === 'TRUE'
+                });
+              }
+            }
+            return cookies;
+          }
 
-          # Run SingleFile CLI with stealth user-agent and the Cloudflare cookies
-          npx single-file --browser-executable-path=$(which google-chrome || which chromium || echo "") \
-            --browser-args='["--no-sandbox","--disable-setuid-sandbox","--disable-blink-features=AutomationControlled"]' \
-            --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-            --cookies-file="cookies.json" \
-            --delay-after-load="$WAIT_SECONDS" \
-            --output="downloads/$BASE.html" \
-            "$URL"
+          const cookies = parseCookies('cookies.txt');
+          const url = process.env.URL;
+          const baseDir = 'downloads/' + process.env.BASE;
 
-          # Verify
-          if [ -f "downloads/$BASE.html" ]; then
-            echo "Offline HTML created successfully."
-          else
-            echo "ERROR: SingleFile did not produce an output."
-            ls -la downloads/
+          const options = {
+            urls: [url],
+            directory: baseDir,
+            recursive: false,
+            sources: [
+              { selector: 'img', attr: 'src' },
+              { selector: 'link[rel=\"stylesheet\"]', attr: 'href' },
+              { selector: 'script', attr: 'src' },
+              { selector: 'source', attr: 'src' },
+              { selector: 'video', attr: 'src' }
+            ],
+            subdirectories: [
+              { directory: 'img', extensions: ['.jpg','.jpeg','.png','.gif','.svg','.webp'] },
+              { directory: 'css', extensions: ['.css'] },
+              { directory: 'js', extensions: ['.js'] },
+              { directory: 'fonts', extensions: ['.woff','.woff2','.ttf','.eot'] },
+              { directory: 'other' }
+            ],
+            request: {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+              }
+            },
+            plugins: [
+              new PuppeteerPlugin({
+                launchOptions: {
+                  headless: 'new',
+                  args: ['--no-sandbox', '--disable-setuid-sandbox']
+                },
+                // Inject cookies before page load
+                beforePageLoad: async (page) => {
+                  if (cookies.length > 0) {
+                    await page.setCookie(...cookies);
+                  }
+                }
+              })
+            ]
+          };
+
+          scrape(options).then(() => {
+            console.log('Website saved to ' + baseDir);
+          }).catch((err) => {
+            console.error('Scraping error:', err);
+            process.exit(1);
+          });
+          "
+
+          # Check that index.html exists
+          if [ ! -f "downloads/$BASE/index.html" ]; then
+            echo "ERROR: index.html not found! Contents of downloads/$BASE:"
+            ls -la downloads/$BASE || echo "(folder missing)"
             exit 1
           fi
-
           echo "base_name=$BASE" >> $GITHUB_ENV
 
       - name: Package into zip
         run: |
           cd downloads
-          zip -r "../${{ env.base_name }}.zip" "${{ env.base_name }}.html"
+          zip -r "../${{ env.base_name }}.zip" "${{ env.base_name }}"
           echo "zip_file=${{ env.base_name }}.zip" >> $GITHUB_ENV
           cd ..
 
@@ -149,5 +189,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "${{ env.zip_file }}"
-          git commit -m "Archived offline page ${{ inputs.url }}" || echo "No changes"
+          git commit -m "Saved offline site ${{ inputs.url }}" || echo "No changes"
           git push
