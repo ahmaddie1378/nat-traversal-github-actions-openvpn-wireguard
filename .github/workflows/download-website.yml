@@ -1,17 +1,16 @@
-name: Download Website (Headless Browser)
+name: Save Web Page (Full Offline + HTML)
 
 on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Website URL'
+        description: 'URL of the page to save'
         required: true
-        type: string
       filename:
-        description: 'Zip filename without .zip (optional, leave empty for domain name)'
+        description: 'Base filename (without extension) – optional'
         required: false
       wait_seconds:
-        description: 'Extra wait after page load (default 30s)'
+        description: 'Extra wait after load (default 30s)'
         required: false
         default: '30'
 
@@ -19,7 +18,7 @@ permissions:
   contents: write
 
 jobs:
-  download-and-zip:
+  save-page:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -57,32 +56,29 @@ jobs:
             -o response.json
 
           python3 << 'EOF'
-          import json, sys
+          import json
           with open('response.json') as f:
               data = json.load(f)
-          cookies = None
-          if 'solution' in data and 'cookies' in data['solution']:
-              cookies = data['solution']['cookies']
-          elif 'cookies' in data:
-              cookies = data['cookies']
+          cookies = data.get('solution', {}).get('cookies') or data.get('cookies')
           valid = 0
           with open('cookies.txt', 'w') as out:
               if cookies:
                   for c in cookies:
                       if not isinstance(c, dict): continue
-                      out.write(f"{c.get('domain','')}\t{'TRUE' if c.get('httpOnly') else 'FALSE'}\t{c.get('path','/')}\t{'TRUE' if c.get('secure') else 'FALSE'}\t{c.get('expiry',0) or 0}\t{c.get('name','')}\t{c.get('value','')}\n")
+                      domain = c.get('domain', '')
+                      httpOnly = 'TRUE' if c.get('httpOnly') else 'FALSE'
+                      path = c.get('path', '/')
+                      secure = 'TRUE' if c.get('secure') else 'FALSE'
+                      expires = c.get('expiry', 0) or 0
+                      name = c.get('name', '')
+                      value = c.get('value', '')
+                      out.write(f"{domain}\t{httpOnly}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
                       valid += 1
-          print(f"Wrote {valid} cookies")
-          final_url = ''
-          if 'solution' in data and 'response' in data['solution']:
-              resp = data['solution']['response']
-              final_url = resp.get('url','') if isinstance(resp, dict) else ''
-          elif 'solution' in data and 'url' in data['solution']:
-              final_url = data['solution']['url']
-          with open('final_url.txt','w') as f: f.write(final_url)
+          print(f"Cookies: {valid}")
+          # final URL not needed for save, just a fallback
           EOF
 
-      - name: Save complete page as MHTML
+      - name: Save page (HTML + MHTML)
         env:
           URL: ${{ inputs.url }}
           FILENAME_INPUT: ${{ inputs.filename }}
@@ -90,16 +86,15 @@ jobs:
         run: |
           mkdir -p downloads
 
-          # Determine output filename base
+          # Build base filename
           if [ -n "$FILENAME_INPUT" ]; then
             BASE="$FILENAME_INPUT"
           else
             DOMAIN=$(echo "$URL" | awk -F/ '{print $3}')
             BASE="${DOMAIN}_$(date +%Y%m%d_%H%M%S)"
           fi
-
-          export BASE                    # <-- make it visible to Node
-          echo "Output base name: $BASE"
+          export BASE
+          echo "Using base filename: $BASE"
 
           node -e "
             const puppeteer = require('puppeteer-extra');
@@ -112,11 +107,7 @@ jobs:
             const waitSeconds = parseInt(process.env.WAIT_SECONDS) || 30;
             const base = process.env.BASE;
 
-            if (!base) {
-              console.error('BASE environment variable is missing!');
-              process.exit(1);
-            }
-
+            // Parse cookies from cookies.txt
             const cookiesRaw = fs.readFileSync('cookies.txt', 'utf-8').split('\n');
             const cookies = [];
             for (const line of cookiesRaw) {
@@ -154,37 +145,43 @@ jobs:
                   waitUntil: 'networkidle2',
                   timeout: 120000
                 });
-                console.log('Page loaded. Waiting ' + waitSeconds + ' seconds...');
+                console.log('Page loaded. Waiting ' + waitSeconds + 's...');
                 await wait(waitSeconds * 1000);
               } catch (err) {
-                console.log('Error or timeout:', err.message);
+                console.log('Timeout/error:', err.message);
                 await wait(Math.max(waitSeconds * 500, 5000));
               }
 
-              // Save as MHTML
+              // 1. Save normal HTML (the current DOM source)
+              const htmlContent = await page.content();
+              fs.writeFileSync('downloads/' + base + '.html', htmlContent);
+              console.log('Saved HTML: downloads/' + base + '.html');
+
+              // 2. Save MHTML (full offline archive)
               const cdp = await page.target().createCDPSession();
               const { data } = await cdp.send('Page.captureSnapshot', { format: 'mhtml' });
               fs.writeFileSync('downloads/' + base + '.mhtml', data);
-              console.log('MHTML saved: downloads/' + base + '.mhtml');
+              console.log('Saved MHTML: downloads/' + base + '.mhtml');
+
               await browser.close();
             })();
           "
 
-          # Verify the file
-          if [ -f "downloads/$BASE.mhtml" ]; then
-            echo "MHTML file exists."
+          # Check if both files exist
+          if [ -f "downloads/$BASE.html" ] && [ -f "downloads/$BASE.mhtml" ]; then
+            echo "Both files created successfully."
           else
-            echo "ERROR: MHTML file was not created!"
+            echo "ERROR: Missing files! Listing downloads folder:"
             ls -la downloads/
             exit 1
           fi
 
           echo "base_name=$BASE" >> $GITHUB_ENV
 
-      - name: Package MHTML into zip
+      - name: Package files into zip
         run: |
           cd downloads
-          zip -r "../${{ env.base_name }}.zip" "${{ env.base_name }}.mhtml"
+          zip -r "../${{ env.base_name }}.zip" "${{ env.base_name }}.html" "${{ env.base_name }}.mhtml"
           echo "zip_file=${{ env.base_name }}.zip" >> $GITHUB_ENV
           cd ..
 
@@ -193,5 +190,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "${{ env.zip_file }}"
-          git commit -m "Archived ${{ inputs.url }}" || echo "No changes"
+          git commit -m "Saved ${{ inputs.url }}" || echo "No changes"
           git push
