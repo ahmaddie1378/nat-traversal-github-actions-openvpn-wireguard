@@ -74,24 +74,9 @@ jobs:
           print("Cookies exported")
           EOF
 
-      - name: Save offline page and assets
-        env:
-          URL: ${{ inputs.url }}
-          FILENAME_INPUT: ${{ inputs.filename }}
-          WAIT_SECONDS: ${{ inputs.wait_seconds }}
+      - name: Write offline capture script
         run: |
-          mkdir -p downloads
-          if [ -n "$FILENAME_INPUT" ]; then
-            BASE="$FILENAME_INPUT"
-          else
-            DOMAIN=$(echo "$URL" | awk -F/ '{print $3}')
-            BASE="${DOMAIN}_$(date +%Y%m%d_%H%M%S)"
-          fi
-          export BASE
-          echo "Saving to folder: downloads/$BASE"
-          mkdir -p "downloads/$BASE"
-
-          node -e "
+          cat > offline-capture.js << 'ENDOFSCRIPT'
           const puppeteer = require('puppeteer-extra');
           const StealthPlugin = require('puppeteer-extra-plugin-stealth');
           puppeteer.use(StealthPlugin());
@@ -104,7 +89,6 @@ jobs:
           const waitSeconds = parseInt(process.env.WAIT_SECONDS) || 30;
           const baseDir = 'downloads/' + process.env.BASE;
 
-          // Parse cookies
           function parseCookies(file) {
             const lines = fs.readFileSync(file, 'utf-8').split('\n');
             const arr = [];
@@ -126,10 +110,6 @@ jobs:
             return arr;
           }
 
-          // Map to store URL -> local file path
-          const urlMap = {};
-
-          // Determine file extension from content-type or URL
           function getExtension(url, contentType) {
             if (contentType) {
               const mimeMap = {
@@ -147,14 +127,14 @@ jobs:
                 if (contentType.includes(mime)) return ext;
               }
             }
-            // Fallback to path extension
             const pathname = new URL(url).pathname;
             return path.extname(pathname) || '.dat';
           }
 
-          const cookies = parseCookies('cookies.txt');
-
           (async () => {
+            const cookies = parseCookies('cookies.txt');
+            const urlMap = {};
+
             const browser = await puppeteer.launch({
               headless: 'new',
               args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
@@ -167,65 +147,70 @@ jobs:
               await page.setCookie(...cookies);
             }
 
-            // Intercept requests to capture assets
             await page.setRequestInterception(true);
             page.on('request', async (request) => {
               const url = request.url();
               const resourceType = request.resourceType();
 
-              // Only handle images, stylesheets, scripts, and fonts
               if (['image', 'stylesheet', 'script', 'font'].includes(resourceType)) {
                 try {
-                  // Fetch the resource ourselves with Node's built-in fetch (Node 18+)
                   const response = await fetch(url);
                   if (response.ok) {
                     const buffer = await response.arrayBuffer();
                     const contentType = response.headers.get('content-type') || '';
                     const ext = getExtension(url, contentType);
-                    // Unique filename based on URL hash
                     const hash = crypto.createHash('md5').update(url).digest('hex').substring(0, 8);
                     const localFilename = hash + ext;
                     const localPath = path.join(baseDir, localFilename);
                     fs.writeFileSync(localPath, Buffer.from(buffer));
                     urlMap[url] = localFilename;
-
-                    // Fulfill the original request with the local file?
-                    // We'll just let it continue, but we'll replace URLs in HTML later.
                   }
                 } catch (e) {
-                  // Ignore, let request continue
+                  // ignore, let request continue
                 }
               }
               request.continue();
             });
 
-            // Navigate to the target page
             try {
               await page.goto(process.env.URL, { waitUntil: 'networkidle2', timeout: 120000 });
             } catch (err) {
               console.log('Navigation warning:', err.message);
             }
-            // Wait for JS to finish
             await wait(waitSeconds * 1000);
 
-            // Get the final DOM HTML
             let html = await page.content();
 
             // Replace resource URLs with local filenames
             for (const [originalUrl, localFile] of Object.entries(urlMap)) {
-              // Escape special regex characters in URL
-              const escaped = originalUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\\\$&');
+              const escaped = originalUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
               html = html.replace(new RegExp(escaped, 'g'), localFile);
             }
 
-            // Write the HTML file
             fs.writeFileSync(path.join(baseDir, 'index.html'), html);
             console.log('Saved offline page to ' + baseDir);
             await browser.close();
           })();
-          "
+          ENDOFSCRIPT
 
-          # Verify output
+      - name: Run offline capture
+        env:
+          URL: ${{ inputs.url }}
+          FILENAME_INPUT: ${{ inputs.filename }}
+          WAIT_SECONDS: ${{ inputs.wait_seconds }}
+          BASE: ${{ inputs.filename || format('{0}_{1}', inputs.url | replace('https://','') | replace('/','_') | truncate(50), github.run_id) }}  # fallback, but we'll compute properly inside script
+        run: |
+          mkdir -p downloads
+          if [ -n "$FILENAME_INPUT" ]; then
+            BASE="$FILENAME_INPUT"
+          else
+            DOMAIN=$(echo "$URL" | awk -F/ '{print $3}')
+            BASE="${DOMAIN}_$(date +%Y%m%d_%H%M%S)"
+          fi
+          export BASE
+          mkdir -p "downloads/$BASE"
+          node offline-capture.js
+
           if [ ! -f "downloads/$BASE/index.html" ]; then
             echo "ERROR: index.html not created"
             ls -la "downloads/$BASE" || echo "folder missing"
