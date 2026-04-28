@@ -93,10 +93,15 @@ jobs:
 
           node -e "
           const scrape = require('website-scraper');
-          const PuppeteerPlugin = require('website-scraper-puppeteer');
+          // Safe import for PuppeteerPlugin
+          let PuppeteerPluginRaw = require('website-scraper-puppeteer');
+          let PuppeteerPlugin = PuppeteerPluginRaw.default || PuppeteerPluginRaw.PuppeteerPlugin || PuppeteerPluginRaw;
+          if (typeof PuppeteerPlugin !== 'function') {
+            console.error('Cannot find PuppeteerPlugin constructor. Exports:', Object.keys(PuppeteerPluginRaw));
+            process.exit(1);
+          }
           const fs = require('fs');
 
-          // Parse cookies from Netscape file
           function parseCookies(file) {
             const lines = fs.readFileSync(file, 'utf-8').split('\n');
             const cookies = [];
@@ -151,7 +156,6 @@ jobs:
                   headless: 'new',
                   args: ['--no-sandbox', '--disable-setuid-sandbox']
                 },
-                // Inject cookies before page load
                 beforePageLoad: async (page) => {
                   if (cookies.length > 0) {
                     await page.setCookie(...cookies);
@@ -169,7 +173,7 @@ jobs:
           });
           "
 
-          # Check that index.html exists
+          # Verify index.html exists
           if [ ! -f "downloads/$BASE/index.html" ]; then
             echo "ERROR: index.html not found! Contents of downloads/$BASE:"
             ls -la downloads/$BASE || echo "(folder missing)"
