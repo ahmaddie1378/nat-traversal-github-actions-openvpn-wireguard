@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Direct URL of the file you want (must be publicly accessible)'
+        description: 'Direct URL of the file'
         required: true
       filename:
         description: 'Filename to save as (optional – leave empty to use name from URL)'
@@ -14,7 +14,7 @@ jobs:
   fetch:
     runs-on: ubuntu-latest
     permissions:
-      contents: write          # allow pushing to repo
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -28,13 +28,23 @@ jobs:
             FILENAME=$(basename "$URL" | cut -d '?' -f1)
           fi
           echo "Downloading $URL => $FILENAME"
-          # Use wget, fallback to curl
           wget --timeout=30 -q -O "$FILENAME" "$URL" || curl -L --max-time 30 -o "$FILENAME" "$URL"
+          echo "FILENAME=$FILENAME" >> $GITHUB_ENV   # pass to later steps
 
-      - name: Commit file to repository
+      - name: Compress file to avoid GitHub's 100 MB limit
+        run: |
+          if [ -f "$FILENAME" ]; then
+            echo "Original size: $(du -h "$FILENAME" | cut -f1)"
+            gzip "$FILENAME"
+            echo "Compressed file: ${FILENAME}.gz (size: $(du -h "${FILENAME}.gz" | cut -f1))"
+          else
+            echo "File not found – nothing to compress"
+          fi
+
+      - name: Commit compressed file to repository
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .
-          git commit -m "Download: $FILENAME" || echo "Nothing to commit"
+          git add "*.gz"              # only the compressed file
+          git commit -m "Download & compress: $FILENAME" || echo "Nothing to commit"
           git push
