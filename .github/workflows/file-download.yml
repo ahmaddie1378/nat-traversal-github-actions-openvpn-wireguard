@@ -7,19 +7,20 @@ on:
         description: 'Direct URL of the file'
         required: true
       filename:
-        description: 'Filename to save as (optional – leave empty to use name from URL)'
+        description: 'Filename to save as (optional)'
         required: false
 
 jobs:
   fetch:
     runs-on: ubuntu-latest
     permissions:
-      contents: write          # required to push LFS objects and commits
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}    # ← add this line
 
-      # Ensure git-lfs is installed and configured
       - name: Setup Git LFS
         run: |
           sudo apt-get update -y
@@ -38,11 +39,9 @@ jobs:
           wget --timeout=30 -q -O "$FILENAME" "$URL" || curl -L --max-time 30 -o "$FILENAME" "$URL"
           echo "FILENAME=$FILENAME" >> $GITHUB_ENV
 
-      # Track the downloaded file with LFS (creates/updates .gitattributes)
       - name: Track file with Git LFS
         run: |
           git lfs track "$FILENAME"
-          # .gitattributes is modified – add it so it’s committed
           git add .gitattributes
 
       - name: Commit and push
