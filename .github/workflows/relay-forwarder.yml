@@ -1,4 +1,4 @@
-name: Relay Forwarder Server
+name: Relay Forwarder Server (Verbose)
 
 on:
   workflow_dispatch:
@@ -12,27 +12,38 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Create forwarder server
+      - name: Create verbose forwarder server
         run: |
           cat > server.js << 'EOF'
           const http = require('http');
           const PORT = process.env.PORT || 8888;
           const AUTH_TOKEN = process.env.AUTH_TOKEN || 'mysecrettoken';
 
+          function log(...args) {
+            console.log(`[${new Date().toISOString()}]`, ...args);
+          }
+
           const server = http.createServer(async (req, res) => {
+            log(`Incoming ${req.method} ${req.url}`);
             if (req.method !== 'POST' || req.url !== '/fetch') {
+              log('Rejected (not POST /fetch)');
               res.writeHead(404);
-              return res.end();
+              return res.end('Not found');
             }
+
             let body = '';
             req.on('data', chunk => body += chunk);
             req.on('end', async () => {
               try {
                 const params = JSON.parse(body);
+                log('Payload:', JSON.stringify({ url: params.url, method: params.method, hasBody: !!params.body, token: params.token ? '***' : 'MISSING' }));
+                
                 if (params.token !== AUTH_TOKEN) {
+                  log('Forbidden: bad token');
                   res.writeHead(403);
                   return res.end('Forbidden');
                 }
+
                 const fetchOptions = {
                   method: params.method || 'GET',
                   headers: params.headers || {},
@@ -40,33 +51,61 @@ jobs:
                 if (params.body) {
                   fetchOptions.body = Buffer.from(params.body, 'base64');
                 }
+
+                log(`Fetching ${params.url}`);
                 const response = await fetch(params.url, fetchOptions);
                 const responseBuffer = await response.arrayBuffer();
                 const responseHeaders = {};
                 response.headers.forEach((value, key) => {
                   responseHeaders[key] = value;
                 });
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
+
+                const result = {
                   s: response.status,
                   h: responseHeaders,
                   b: Buffer.from(responseBuffer).toString('base64'),
-                }));
+                };
+                log(`Response: ${response.status}, body length: ${responseBuffer.byteLength}`);
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result));
               } catch (err) {
+                log('Error:', err.message);
                 res.writeHead(502);
-                res.end(JSON.stringify({ error: String(err) }));
+                res.end(JSON.stringify({ error: err.message }));
               }
             });
           });
-          server.listen(PORT, () => console.log(`Forwarder listening on ${PORT}`));
+
+          server.listen(PORT, () => log(`Forwarder ready on port ${PORT}`));
           EOF
 
-      - name: Start forwarder and create tunnel
+      - name: Start forwarder and tunnel
         run: |
           node server.js &
           sleep 2
-          # Use ssh to expose port 8888 via serveo.net
-          ssh -o StrictHostKeyChecking=no -R 80:localhost:8888 serveo.net &
-          sleep 5
-          echo "Tunnel started. Public URL will appear in the ssh output (https://xxx.serveo.net)."
+          # Start tunnel and capture its URL
+          ssh -o StrictHostKeyChecking=no -R 80:localhost:8888 serveo.net 2>&1 | tee serveo.log &
+          sleep 10
+          # Extract the public URL from the log
+          PUBLIC_URL=$(grep -oP 'https?://\S+\.serveo\.net' serveo.log | head -1)
+          if [ -z "$PUBLIC_URL" ]; then
+            echo "Failed to capture tunnel URL. Check the SSH logs above."
+          else
+            echo "PUBLIC_URL=$PUBLIC_URL" >> $GITHUB_ENV
+            echo "Your forwarder is live at: $PUBLIC_URL/fetch"
+          fi
+          # Keep alive
           sleep 21000
+
+      - name: Self‑test the forwarder
+        if: env.PUBLIC_URL != ''
+        run: |
+          sleep 3   # give a little more time for first‑time SSH
+          echo "Testing $PUBLIC_URL/fetch with a simple request..."
+          RESPONSE=$(curl -s -X POST "$PUBLIC_URL/fetch" \
+            -H "Content-Type: application/json" \
+            -d '{"token":"mysecrettoken","url":"https://httpbin.org/ip","method":"GET","headers":{}}')
+          echo "$RESPONSE"
+          # Check if it returned valid JSON with a status
+          echo "$RESPONSE" | jq .s > /dev/null && echo "✅ Self‑test passed" || echo "❌ Self‑test failed"
