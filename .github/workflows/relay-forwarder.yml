@@ -1,0 +1,84 @@
+name: Relay Forwarder Server
+
+on:
+  workflow_dispatch:
+
+jobs:
+  forwarder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Create forwarder server
+        run: |
+          cat > server.js << 'EOF'
+          const http = require('http');
+
+          const PORT = process.env.PORT || 8888;
+          const AUTH_TOKEN = process.env.AUTH_TOKEN || 'mysecrettoken';
+
+          const server = http.createServer(async (req, res) => {
+            // Only allow POST to /fetch
+            if (req.method !== 'POST' || req.url !== '/fetch') {
+              res.writeHead(404);
+              return res.end();
+            }
+
+            let body = '';
+            req.on('data', chunk => body += chunk);
+            req.on('end', async () => {
+              try {
+                const params = JSON.parse(body);
+                if (params.token !== AUTH_TOKEN) {
+                  res.writeHead(403);
+                  return res.end('Forbidden');
+                }
+
+                // Make the actual request
+                const fetchOptions = {
+                  method: params.method || 'GET',
+                  headers: params.headers || {},
+                };
+                if (params.body) {
+                  fetchOptions.body = Buffer.from(params.body, 'base64');
+                }
+
+                const response = await fetch(params.url, fetchOptions);
+                const responseBuffer = await response.arrayBuffer();
+                const responseHeaders = {};
+                response.headers.forEach((value, key) => {
+                  responseHeaders[key] = value;
+                });
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                  s: response.status,
+                  h: responseHeaders,
+                  b: Buffer.from(responseBuffer).toString('base64'),
+                }));
+              } catch (err) {
+                res.writeHead(502);
+                res.end(JSON.stringify({ error: String(err) }));
+              }
+            });
+          });
+
+          server.listen(PORT, () => console.log(`Forwarder listening on port ${PORT}`));
+          EOF
+
+      - name: Start forwarder and create tunnel
+        env:
+          SERVE_AUTH_KEY: ${{ secrets.SERVE_AUTH_KEY }}   # optional, for custom domains
+        run: |
+          node server.js &
+          sleep 2
+          # Expose via serveo.net (free, no account needed)
+          ssh -o StrictHostKeyChecking=no -R 80:localhost:8888 serveo.net &
+          # Wait for the SSH tunnel to be ready – the public URL will appear in logs
+          sleep 5
+          echo "Forwarder is running. Public URL will be shown in the ssh output (e.g., https://random.serveo.net)."
+          # Keep alive for 5h50m
+          sleep 21000
