@@ -1,31 +1,23 @@
-name: Download Blocked File (LFS)
+name: Download Blocked File
 
 on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Direct URL of the file'
+        description: 'Direct URL of the file you want (must be publicly accessible)'
         required: true
       filename:
-        description: 'Filename to save as (optional)'
+        description: 'Filename to save as (optional – leave empty to use name from URL)'
         required: false
 
 jobs:
   fetch:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write          # allow pushing to repo
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GH_PAT }}    # ← add this line
-
-      - name: Setup Git LFS
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y git-lfs
-          git lfs install
 
       - name: Download the file
         run: |
@@ -37,17 +29,38 @@ jobs:
           fi
           echo "Downloading $URL => $FILENAME"
           wget --timeout=30 -q -O "$FILENAME" "$URL" || curl -L --max-time 30 -o "$FILENAME" "$URL"
-          echo "FILENAME=$FILENAME" >> $GITHUB_ENV
 
-      - name: Track file with Git LFS
+      - name: Compress and split if >90 MB
         run: |
-          git lfs track "$FILENAME"
-          git add .gitattributes
+          # Set threshold to 90 MB (90 * 1024 * 1024 bytes)
+          THRESHOLD=$((90 * 1024 * 1024))
+          FILESIZE=$(stat -c%s "$FILENAME" 2>/dev/null || echo 0)
 
-      - name: Commit and push
+          if [ "$FILESIZE" -gt "$THRESHOLD" ]; then
+            echo "File is larger than 90 MB, compressing and splitting..."
+
+            # 1. Compress with gzip
+            gzip -c "$FILENAME" > "$FILENAME.gz"
+
+            # 2. Remove the original large file (otherwise git will see it)
+            rm "$FILENAME"
+
+            # 3. Split into 90 MB chunks (numeric suffixes, no extra extension)
+            split -b 90M -d "$FILENAME.gz" "$FILENAME.gz.part"
+
+            # 4. Remove the unsplit .gz file
+            rm "$FILENAME.gz"
+
+            echo "Split into parts:"
+            ls -lh "$FILENAME.gz.part"*
+          else
+            echo "File size is ${FILESIZE} bytes – no splitting needed."
+          fi
+
+      - name: Commit file(s) to repository
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "$FILENAME"
-          git commit -m "Download (LFS): $FILENAME" || echo "Nothing to commit"
+          git add .
+          git commit -m "Download: $FILENAME" || echo "Nothing to commit"
           git push
