@@ -14,7 +14,7 @@ jobs:
   fetch:
     runs-on: ubuntu-latest
     permissions:
-      contents: write          # allow pushing to repo
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,34 +27,35 @@ jobs:
           else
             FILENAME=$(basename "$URL" | cut -d '?' -f1)
           fi
+          echo "FILENAME=$FILENAME" >> $GITHUB_ENV   # ← export for later steps
           echo "Downloading $URL => $FILENAME"
-          wget --timeout=30 -q -O "$FILENAME" "$URL" || curl -L --max-time 30 -o "$FILENAME" "$URL"
+          wget --timeout=30 -q -O "$FILENAME" "$URL" || \
+            curl -L --max-time 30 -o "$FILENAME" "$URL"
 
-      - name: Compress and split if >90 MB
+      - name: Compress and split if >90 MB
         run: |
-          # Set threshold to 90 MB (90 * 1024 * 1024 bytes)
+          FILENAME="${{ env.FILENAME }}"   # or just $FILENAME (already exported)
           THRESHOLD=$((90 * 1024 * 1024))
-          FILESIZE=$(stat -c%s "$FILENAME" 2>/dev/null || echo 0)
+
+          # Better size check (file must exist)
+          if [ ! -f "$FILENAME" ]; then
+            echo "ERROR: File $FILENAME not found!"
+            exit 1
+          fi
+
+          FILESIZE=$(stat -c%s "$FILENAME")
+          echo "File size: $FILESIZE bytes"
 
           if [ "$FILESIZE" -gt "$THRESHOLD" ]; then
-            echo "File is larger than 90 MB, compressing and splitting..."
-
-            # 1. Compress with gzip
+            echo "Splitting..."
             gzip -c "$FILENAME" > "$FILENAME.gz"
-
-            # 2. Remove the original large file (otherwise git will see it)
             rm "$FILENAME"
-
-            # 3. Split into 90 MB chunks (numeric suffixes, no extra extension)
             split -b 90M -d "$FILENAME.gz" "$FILENAME.gz.part"
-
-            # 4. Remove the unsplit .gz file
             rm "$FILENAME.gz"
-
-            echo "Split into parts:"
+            echo "Parts created:"
             ls -lh "$FILENAME.gz.part"*
           else
-            echo "File size is ${FILESIZE} bytes – no splitting needed."
+            echo "No splitting needed."
           fi
 
       - name: Commit file(s) to repository
