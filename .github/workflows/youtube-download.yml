@@ -7,11 +7,10 @@ on:
         description: 'YouTube video URL'
         required: true
       format:
-        description: 'yt-dlp format selector (default: best video+audio up to 720p)'
+        description: 'yt-dlp format selector'
         required: false
         default: 'bestvideo[height<=720]+bestaudio/best[height<=720]'
 
-# Give the workflow permission to push commits
 permissions:
   contents: write
 
@@ -22,6 +21,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install Deno (JavaScript runtime for yt-dlp)
+        run: |
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "$HOME/.deno/bin" >> $GITHUB_PATH
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -30,13 +34,15 @@ jobs:
       - name: Install yt-dlp
         run: pip install yt-dlp
 
-      - name: Download video
+      - name: Download video (Android client, JavaScript enabled)
         run: |
           mkdir -p videos
           yt-dlp \
             --format "${{ inputs.format }}" \
             --output "videos/%(id)s.%(ext)s" \
             --no-playlist \
+            --extractor-args "youtube:player_client=android" \
+            --js-runtime deno \
             "${{ inputs.url }}"
 
       - name: Commit and push
@@ -44,10 +50,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add videos/
-          # Only commit if something was actually downloaded
           if git diff --cached --quiet; then
-            echo "Nothing new to commit."
+            echo "Nothing to commit."
           else
-            git commit -m "Add YouTube video: ${{ inputs.url }}"
+            git commit -m "Add video: ${{ inputs.url }}"
             git push
           fi
