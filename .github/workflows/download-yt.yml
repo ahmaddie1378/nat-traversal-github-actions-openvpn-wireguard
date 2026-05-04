@@ -50,11 +50,11 @@ jobs:
             --remote-components ejs:github \
             "${{ inputs.url }}"
 
-      - name: Commit and push video
+      - name: Commit and push video (allow sparse paths)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add videos/
+          git add --sparse videos/
           if git diff --cached --quiet; then
             echo "Nothing to commit."
           else
