@@ -18,8 +18,12 @@ jobs:
   download-and-commit:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository (includes cookies.txt)
+      - name: Checkout only cookies.txt (not the whole repo)
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            cookies.txt
+          fetch-depth: 1
 
       - name: Install Deno (JavaScript runtime for yt-dlp)
         run: |
@@ -34,7 +38,7 @@ jobs:
       - name: Install yt-dlp
         run: pip install yt-dlp
 
-      - name: Download video using local cookies.txt
+      - name: Download video using cookies.txt
         run: |
           mkdir -p videos
           yt-dlp \
