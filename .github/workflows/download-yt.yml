@@ -18,14 +18,14 @@ jobs:
   download-and-commit:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout only cookies.txt (not the whole repo)
+      - name: Checkout only cookies.txt (not whole repo)
         uses: actions/checkout@v4
         with:
           sparse-checkout: |
             cookies.txt
           fetch-depth: 1
 
-      - name: Install Deno (JavaScript runtime for yt-dlp)
+      - name: Install Deno (JavaScript runtime)
         run: |
           curl -fsSL https://deno.land/install.sh | sh
           echo "$HOME/.deno/bin" >> $GITHUB_PATH
@@ -38,7 +38,7 @@ jobs:
       - name: Install yt-dlp
         run: pip install yt-dlp
 
-      - name: Download video using cookies.txt
+      - name: Download video with remote challenge solver
         run: |
           mkdir -p videos
           yt-dlp \
@@ -47,6 +47,7 @@ jobs:
             --no-playlist \
             --cookies cookies.txt \
             --js-runtime deno \
+            --remote-components ejs:github \
             "${{ inputs.url }}"
 
       - name: Commit and push video
