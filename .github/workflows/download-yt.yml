@@ -50,7 +50,24 @@ jobs:
             --remote-components ejs:github \
             "${{ inputs.url }}"
 
-      - name: Commit and push video (allow sparse paths)
+      - name: Split files larger than 90 MB into gzipped chunks
+        run: |
+          max_bytes=$((90 * 1024 * 1024))   # 90 MB
+          for file in videos/*; do
+            if [ -f "$file" ]; then
+              size=$(stat -c%s "$file")
+              if [ "$size" -gt "$max_bytes" ]; then
+                echo "Splitting $file ($size bytes)"
+                split -b 90M --numeric-suffixes=1 --suffix-length=2 "$file" "${file}.part"
+                for chunk in "${file}.part"*; do
+                  gzip "$chunk"
+                done
+                rm "$file"
+              fi
+            fi
+          done
+
+      - name: Commit and push video(s) – no LFS used
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
