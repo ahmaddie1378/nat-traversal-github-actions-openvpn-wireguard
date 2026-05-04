@@ -67,7 +67,10 @@ jobs:
             fi
           done
 
-      - name: Commit and push video(s) – no LFS used
+      - name: Disable Git LFS for videos folder
+        run: echo "videos/* -filter -diff -merge" > .gitattributes
+
+      - name: Commit and push video(s) – LFS completely bypassed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -78,3 +81,6 @@ jobs:
             git commit -m "Add video: ${{ inputs.url }}"
             git push
           fi
+
+      - name: Clean up temporary .gitattributes
+        run: rm -f .gitattributes
