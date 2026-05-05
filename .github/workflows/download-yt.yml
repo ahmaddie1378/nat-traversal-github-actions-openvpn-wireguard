@@ -23,17 +23,15 @@ permissions:
   contents: write
 
 jobs:
-  download-and-upload:
+  download-and-commit:
     runs-on: ubuntu-latest
     steps:
-      - name: Download cookies.txt via API (no clone)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          curl -H "Authorization: token $GITHUB_TOKEN" \
-               -H "Accept: application/vnd.github.v3.raw" \
-               -o cookies.txt \
-               "https://api.github.com/repos/${{ github.repository }}/contents/cookies.txt?ref=${{ github.ref_name }}"
+      - name: Checkout only cookies.txt (not whole repo)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            cookies.txt
+          fetch-depth: 1
 
       - name: Install Deno (JavaScript runtime)
         run: |
@@ -51,7 +49,7 @@ jobs:
       - name: Install yt-dlp
         run: pip install yt-dlp
 
-      - name: Download video or audio
+      - name: Download content (video or audio)
         run: |
           mkdir -p videos
           if [ "${{ inputs.download_type }}" = "audio" ]; then
@@ -95,20 +93,20 @@ jobs:
             fi
           done
 
-      - name: Upload all files to repository via API (no git clone)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Disable Git LFS for videos folder
+        run: echo "videos/* -filter -diff -merge" > .gitattributes
+
+      - name: Commit and push content (no LFS)
         run: |
-          for file_path in videos/*; do
-            [ -f "$file_path" ] || continue
-            filename=$(basename "$file_path")
-            # Read and base64-encode the file
-            content_base64=$(base64 -w 0 "$file_path")
-            # Upload (create or update) the file via GitHub API
-            gh api --method PUT \
-              "/repos/${{ github.repository }}/contents/videos/$filename" \
-              -f message="Add ${{ inputs.download_type }}: ${{ inputs.url }}" \
-              -f content="$content_base64" \
-              -f branch="${{ github.ref_name }}"
-            echo "Uploaded: $filename"
-          done
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add --sparse videos/
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -m "Add ${{ inputs.download_type }}: ${{ inputs.url }}"
+            git push
+          fi
+
+      - name: Clean up temporary .gitattributes
+        run: rm -f .gitattributes
