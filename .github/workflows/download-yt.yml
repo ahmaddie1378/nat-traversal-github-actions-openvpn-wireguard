@@ -78,24 +78,24 @@ jobs:
               "${{ inputs.url }}"
           fi
 
-      - name: Split files larger than 80 MB into gzipped chunks
+      - name: Split any file larger than 48 MB into chunks and gzip them
         run: |
-          max_bytes=$((80 * 1024 * 1024))
+          max_bytes=$((48 * 1024 * 1024))   # 48 MB
           for file in videos/*; do
             if [ -f "$file" ]; then
               size=$(stat -c%s "$file")
               if [ "$size" -gt "$max_bytes" ]; then
                 echo "Splitting $file ($size bytes)"
-                split -b 90M --numeric-suffixes=1 --suffix-length=2 "$file" "${file}.part"
+                split -b 48M --numeric-suffixes=1 --suffix-length=2 "$file" "${file}.part"
                 for chunk in "${file}.part"*; do
-                  gzip "$chunk"
+                  gzip "$chunk"   # each chunk is now .partNN.gz
                 done
-                rm "$file"
+                rm "$file"        # remove the original large file
               fi
             fi
           done
 
-      - name: Upload all files to repository via API (safe for large files)
+      - name: Upload all files to repository via API (no git clone)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -104,10 +104,8 @@ jobs:
             filename=$(basename "$file_path")
             echo "Uploading $filename ..."
 
-            # Base64-encode the file without line wrapping
             content_base64=$(base64 -w 0 "$file_path")
 
-            # Create a temporary JSON payload
             cat > payload.json <<EOF
           {
             "message": "Add ${{ inputs.download_type }}: ${{ inputs.url }}",
@@ -116,7 +114,6 @@ jobs:
           }
           EOF
 
-            # Upload via curl (raw JSON payload)
             curl -X PUT \
               -H "Authorization: token $GITHUB_TOKEN" \
               -H "Accept: application/vnd.github.v3+json" \
