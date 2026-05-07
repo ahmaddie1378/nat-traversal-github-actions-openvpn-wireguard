@@ -23,17 +23,15 @@ permissions:
   contents: write
 
 jobs:
-  download-and-upload:
+  download-and-push:
     runs-on: ubuntu-latest
     steps:
-      - name: Download cookies.txt via API (no clone)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          curl -H "Authorization: token $GITHUB_TOKEN" \
-               -H "Accept: application/vnd.github.v3.raw" \
-               -o cookies.txt \
-               "https://api.github.com/repos/${{ github.repository }}/contents/cookies.txt?ref=${{ github.ref_name }}"
+      - name: Fast shallow checkout (only cookies.txt)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            cookies.txt
+          fetch-depth: 1
 
       - name: Install Deno (JavaScript runtime)
         run: |
@@ -78,48 +76,36 @@ jobs:
               "${{ inputs.url }}"
           fi
 
-      - name: Split any file larger than 48 MB into chunks and gzip them
+      - name: Split any file larger than 90 MB into gzipped chunks
         run: |
-          max_bytes=$((48 * 1024 * 1024))   # 48 MB
+          max_bytes=$((90 * 1024 * 1024))   # 90 MB (safe for push)
           for file in videos/*; do
-            if [ -f "$file" ]; then
-              size=$(stat -c%s "$file")
-              if [ "$size" -gt "$max_bytes" ]; then
-                echo "Splitting $file ($size bytes)"
-                split -b 48M --numeric-suffixes=1 --suffix-length=2 "$file" "${file}.part"
-                for chunk in "${file}.part"*; do
-                  gzip "$chunk"   # each chunk is now .partNN.gz
-                done
-                rm "$file"        # remove the original large file
-              fi
+            [ -f "$file" ] || continue
+            size=$(stat -c%s "$file")
+            if [ "$size" -gt "$max_bytes" ]; then
+              echo "Splitting $file ($size bytes)"
+              split -b 90M --numeric-suffixes=1 --suffix-length=2 "$file" "${file}.part"
+              for chunk in "${file}.part"*; do
+                gzip "$chunk"
+              done
+              rm "$file"
             fi
           done
 
-      - name: Upload all files to repository via API (no git clone)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Disable Git LFS for the videos folder
+        run: echo "videos/* -filter -diff -merge" > .gitattributes
+
+      - name: Commit and push (Git push – no API size limit)
         run: |
-          for file_path in videos/*; do
-            [ -f "$file_path" ] || continue
-            filename=$(basename "$file_path")
-            echo "Uploading $filename ..."
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add --sparse videos/
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -m "Add ${{ inputs.download_type }}: ${{ inputs.url }}"
+            git push
+          fi
 
-            content_base64=$(base64 -w 0 "$file_path")
-
-            cat > payload.json <<EOF
-          {
-            "message": "Add ${{ inputs.download_type }}: ${{ inputs.url }}",
-            "content": "${content_base64}",
-            "branch": "${{ github.ref_name }}"
-          }
-          EOF
-
-            curl -X PUT \
-              -H "Authorization: token $GITHUB_TOKEN" \
-              -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/${{ github.repository }}/contents/videos/${filename}" \
-              -d @payload.json
-
-            rm -f payload.json
-            echo "Uploaded: $filename"
-          done
+      - name: Clean up temporary .gitattributes
+        run: rm -f .gitattributes
