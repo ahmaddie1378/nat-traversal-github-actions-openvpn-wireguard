@@ -78,9 +78,9 @@ jobs:
               "${{ inputs.url }}"
           fi
 
-      - name: Split files larger than 90 MB into gzipped chunks
+      - name: Split files larger than 80 MB into gzipped chunks
         run: |
-          max_bytes=$((90 * 1024 * 1024))
+          max_bytes=$((80 * 1024 * 1024))
           for file in videos/*; do
             if [ -f "$file" ]; then
               size=$(stat -c%s "$file")
