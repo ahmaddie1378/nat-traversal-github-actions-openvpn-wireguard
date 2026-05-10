@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'YouTube video URL'
+        description: 'YouTube video/playlist URL'
         required: true
       download_type:
         description: 'Download type'
@@ -14,8 +14,16 @@ on:
         options:
           - 'video'
           - 'audio'
+      playlist_mode:
+        description: 'Download a whole playlist?'
+        required: true
+        type: choice
+        default: 'single'
+        options:
+          - 'single'
+          - 'playlist'
       format:
-        description: 'Format string (for video; ignored for audio)'
+        description: 'Format string (video only, ignored for audio)'
         required: false
         default: 'bestvideo[height<=720]+bestaudio/best[height<=720]'
 
@@ -49,28 +57,36 @@ jobs:
       - name: Install yt-dlp
         run: pip install yt-dlp
 
-      - name: Download video or audio (always a single file)
+      - name: Download content (single or playlist)
         run: |
           mkdir -p videos
+
+          # Build flags depending on playlist mode
+          if [ "${{ inputs.playlist_mode }}" = "playlist" ]; then
+            playlist_flag="--yes-playlist"
+          else
+            playlist_flag="--no-playlist"
+          fi
+
           if [ "${{ inputs.download_type }}" = "audio" ]; then
-            echo "Downloading best audio (m4a)"
+            echo "Downloading audio (single or playlist)"
             yt-dlp \
               --format bestaudio/best \
               --extract-audio \
               --audio-format m4a \
-              --output "videos/%(id)s.%(ext)s" \
-              --no-playlist \
+              --output "videos/%(playlist_index)s-%(id)s.%(ext)s" \
+              $playlist_flag \
               --cookies cookies.txt \
               --js-runtime deno \
               --remote-components ejs:github \
               "${{ inputs.url }}"
           else
-            echo "Downloading video (merged single file)"
+            echo "Downloading video (merged single file per video)"
             yt-dlp \
               --format "${{ inputs.format }}" \
               --merge-output-format mp4 \
-              --output "videos/%(id)s.%(ext)s" \
-              --no-playlist \
+              --output "videos/%(playlist_index)s-%(id)s.%(ext)s" \
+              $playlist_flag \
               --cookies cookies.txt \
               --js-runtime deno \
               --remote-components ejs:github \
@@ -104,7 +120,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "Nothing to commit."
           else
-            git commit -m "Add ${{ inputs.download_type }}: ${{ inputs.url }}"
+            git commit -m "Add ${{ inputs.download_type }} (${{ inputs.playlist_mode }}): ${{ inputs.url }}"
             git push
           fi
 
