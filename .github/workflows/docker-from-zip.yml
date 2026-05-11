@@ -1,0 +1,56 @@
+name: Run Docker from ZIP
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_file:
+        description: 'Path to zip file in repo (e.g. my-docker-project.zip)'
+        required: true
+        default: 'docker-stuff.zip'
+      output_dir:
+        description: 'Folder for output files (will be committed)'
+        required: false
+        default: 'videos'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract ZIP file
+        run: |
+          unzip -q "${{ inputs.zip_file }}" -d ./docker-project
+          ls -la ./docker-project   # debug: see what's inside
+
+      - name: Build Docker image
+        run: |
+          docker build -t my-custom-image ./docker-project
+
+      - name: Create output directory
+        run: mkdir -p "${{ inputs.output_dir }}"
+
+      - name: Run Docker container
+        run: >
+          docker run --rm
+          -v "${{ github.workspace }}/${{ inputs.output_dir }}:/output"
+          my-custom-image
+
+      - name: Disable Git LFS for output folder
+        run: echo "${{ inputs.output_dir }}/* -filter -diff -merge" > .gitattributes
+
+      - name: Commit and push output files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${{ inputs.output_dir }}/"
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Add output from Docker run"
+            git push
+          fi
